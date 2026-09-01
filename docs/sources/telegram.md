@@ -8,7 +8,22 @@
 ## 1. This is an official API, and that changes six things
 
 `api_id` / `api_hash` are **self-issued** at my.telegram.org → "API development tools", against
-your own phone-numbered account. No review, no approval queue, no business entity, no ticket.
+your own phone-numbered account. No review queue, no approval ticket, no business entity.
+
+> **But "no gate" is overstated, and the whole delivery order rests on this.** The
+> *Create application* form is reported to return a bare `ERROR` with no diagnostic for a
+> substantial number of accounts — Telethon issue #4661, opened 2025-07-16, never resolved,
+> and now frozen because the GitHub repo was archived 2026-02-21. Every reported workaround
+> is folklore: different browser, incognito, different network, wait days. The accurate
+> statement is **"no review queue, but the self-service form fails opaquely for some
+> accounts."**
+>
+> So **confirm you can actually obtain one on day one** — that is **T0** in
+> [../../PLAN.md](../../PLAN.md) §6 M0, alongside Reddit's R0, and it is item 0 in §18
+> below. Reddit's credential risk gets a free day-one spike precisely because it might not
+> resolve; the premise on this side deserved the same treatment. **If T0 fails, Telegram is
+> not connector #2** and the slot goes to whichever of Reddit (if R0 came back approved) or
+> the X archive importer is available. That call is pre-made in PLAN §6 M0.
 Telegram publishes the protocol, the schema, the error table and the offset semantics. Logging
 in as your own user account is the *intended* use of MTProto — third-party clients are the
 reason the API exists.
@@ -40,7 +55,7 @@ web.telegram.org would be strictly worse on every row of that table and is not c
    core.telegram.org/api/terms; body pages not fetched — re-read before relying on the
    exception.)* If any downstream use of this corpus involves an LLM — summarisation,
    embeddings, semantic search over chat history — that is a hard architectural boundary,
-   not a footnote. See [./docs/GOVERNANCE.md](../GOVERNANCE.md) §10; the constraint is
+   not a footnote. See [../GOVERNANCE.md](../GOVERNANCE.md) §10; the constraint is
    stamped into every export manifest so it travels with the data.
 
 ---
@@ -80,9 +95,9 @@ are welcome, and some small additions may still be added from time to time." An 
 wants an API surface that does not move under it while still tracking the wire protocol.
 
 **Containment.** Every Telethon symbol lives inside `connectors/telegram/`. No Telethon type
-crosses the `Envelope` boundary. This is the same isolation argument PLAN.md §2 makes for
-`stealth.py`, and it is what makes a Kurigram swap a one-directory change rather than a
-rewrite. Vendor the wheel; a "may be deleted in the future" mirror is not a supply chain the
+crosses the `Envelope` boundary. This is the same isolation argument the Facebook connector makes for selenium — every
+third-party client lives inside its own connector directory (PLAN.md §5.5) — and it is what
+makes a Kurigram swap a one-directory change rather than a rewrite. Vendor the wheel; a "may be deleted in the future" mirror is not a supply chain the
 08:05 job should depend on.
 
 **Python version.** Telethon declares `requires_python = ">=3.5"` and its classifiers stop at
@@ -159,7 +174,7 @@ Rules, all of them load-bearing:
 | **Outside the git worktree** | so no `.gitignore` mistake can ever stage it. `*.session*` is gitignored anyway, as belt and braces |
 | **Never in a synced directory** — `~/Library/Mobile Documents`, `~/Library/CloudStorage`, `~/Dropbox`, `~/Google Drive`, `~/OneDrive` | `doctor` refuses to start if the resolved path is under one |
 | **Excluded from Time Machine** (`tmutil addexclusion`) | a backup of this file is a backup of full account access |
-| **FileVault on** — checked by `doctor` via `fdesetup status` | see [./docs/GOVERNANCE.md](../GOVERNANCE.md) §5 |
+| **FileVault on** — checked by `doctor` via `fdesetup status` | see [../GOVERNANCE.md](../GOVERNANCE.md) §5 |
 | **`flock` before the client is constructed** (`Cap.SINGLE_FLIGHT`) | one process, always |
 | **Never copied to a second machine.** A second machine does a second login and gets its own session | see below |
 
@@ -196,7 +211,7 @@ job blocked on a hidden password prompt is a job that silently stops collecting.
 | Private chat / DM (`User`) | full history | both sides' messages | `conversation` |
 | Forum topic (supergroup `forum=True`) | via `reply_to.forum_topic` / `top_msg_id` | modelled as `kind='forum_topic'`, `parent_id` → the supergroup | inherits parent |
 | Channel comments | via the **linked discussion group** | `iter_messages(channel, reply_to=post_id)` works only in broadcast channels and their linked megagroups; a plain chat raises `PeerIdInvalidError` | that group's own class |
-| Participant lists | **not collected** | `store_rosters: false`, not configurable — see [./docs/GOVERNANCE.md](../GOVERNANCE.md) §9 |  |
+| Participant lists | **not collected** | `store_rosters: false`, not configurable — see [../GOVERNANCE.md](../GOVERNANCE.md) §9 |  |
 | Contacts, phone numbers, presence, read receipts | **never collected** | dropped by `scrub()` before persistence — §12 |  |
 
 **A channel and its linked discussion group are two containers**, joined by
@@ -225,7 +240,7 @@ Deliberately **not** set:
 | Flag | Why not |
 |---|---|
 | `Cap.DELETE_EVENTS` | `MessageDeleted` is documented as unreliable and `UpdatesTooLong` / `ChannelDifferenceTooLong` explicitly mean "I will not enumerate what you missed." Setting this flag would gate off the absence sweep, and DM deletions would then **never** be detected. This is a deliberate correction to an earlier draft that set the flag and contradicted its own body text. |
-| `Cap.PUSH` | v1 is poll-only — §7 |
+| *(`Cap.PUSH`)* | **not applicable — the flag does not exist in the enum.** v1 is poll-only (§7), and Telegram listen mode is the only candidate that would ever have set it. See ARCHITECTURE §6 |
 | `Cap.NEEDS_GUI` | no browser anywhere in this connector |
 | `Cap.PARALLEL_TARGETS` | one session, one flock, strictly serial targets |
 | `Cap.BACKFILL_CAPPED` | there is no ceiling; backfill is bounded by policy, not by the platform |
@@ -284,13 +299,15 @@ What a listener actually costs:
 
 What it buys: minutes of latency on a **nightly personal archive**. That is not a trade.
 
-**Deferred, with a trigger.** Listen mode is a strict superset of the pull path — same
-envelopes, same store, same reconciler — so switching later costs no migration. The
-architecture already has the slot: a `Receiver` fsyncs signed bytes into `spool/telegram/` and
-the ordinary scheduled `fetch()` drains that directory, so a listener never opens SQLite.
-**Trigger:** the user says nightly latency is not good enough. **Hard rule if it ships:**
-never run a listener and a pull run against the same `.session` file; that is the
-`AUTH_KEY_DUPLICATED` gun, and it is loaded.
+**Deferred, with a trigger** ([../../PLAN.md](../../PLAN.md) §11). Listen mode is a strict
+superset of the pull path — same envelopes, same store, same reconciler — so switching later
+costs no migration. The *design* for how a listener would avoid opening SQLite is written
+down in [../DECISIONS.md](../DECISIONS.md) ADR-0036 and is explicitly **not built**: there is
+no `Receiver`, no spool, no `Cap.PUSH` and no second LaunchAgent at v1, because this deferred
+item is the only candidate producer and it is itself deferred. **Trigger:** the user says
+nightly latency is not good enough. **Hard rule if it ships:** never run a listener and a
+pull run against the same `.session` file; that is the `AUTH_KEY_DUPLICATED` gun, and it is
+loaded.
 
 ---
 
@@ -516,7 +533,7 @@ ids in the per-peer sequence. If `parse()` drops them:
 So: persist them as `item_type='tg.service'` with `text = NULL` and the action type in
 `extra`. **Do not persist the action's payload** for conversation containers — "X added Y to
 the group" names a third party who may never have written a message, and
-[./docs/GOVERNANCE.md](../GOVERNANCE.md) §9 keeps rosters out. Store the action *kind*,
+[../GOVERNANCE.md](../GOVERNANCE.md) §9 keeps rosters out. Store the action *kind*,
 not its participants.
 
 `MessageEmpty` is the opposite case: it is what a deleted id returns inside a range. Map it to
@@ -527,7 +544,7 @@ absence evidence, never to an item row.
 ## 11. Media: metadata only, and be honest about why
 
 **Default `media_mode = 'link'` for every privacy class at v1**, per
-[./docs/GOVERNANCE.md](../GOVERNANCE.md) §2. For Telegram, "link" needs an asterisk:
+[../GOVERNANCE.md](../GOVERNANCE.md) §2. For Telegram, "link" needs an asterisk:
 
 **There is no durable URL for Telegram media.** Downloading requires `id` + `access_hash` +
 `file_reference`, and:
@@ -596,7 +613,7 @@ not a policy note — it is the reason no connector can accidentally persist one
 ## 13. Envelope, parse and the honest raw-first caveat
 
 The `Envelope` / `Cursor` / `Coverage` contract itself is specified in
-[../ARCHITECTURE.md](../../ARCHITECTURE.md); this section is only what Telegram puts in it.
+[../../ARCHITECTURE.md](../../ARCHITECTURE.md); this section is only what Telegram puts in it.
 
 ### 13.1 Kinds
 
@@ -766,7 +783,7 @@ Same skeleton, six deliberate differences:
 | 2 | `fetch()` never reads below `gov.enrolled_at` | forward-only enrolment; the floor is a `gaps` row with `reason='enrolled_floor'`, not silence |
 | 3 | ids-refresh window widens to **2,000 ids or 30 days**, whichever is smaller | participants delete messages and you must honour that |
 | 4 | `absence_strikes = 2`, `on_upstream_delete = 'follow'` | an unsend is a request in the only vocabulary the platform gives the other person |
-| 5 | one `AuthorDraft` per sender on first sight; **no roster**, no phone, no presence | §12, and [./docs/GOVERNANCE.md](../GOVERNANCE.md) §9 |
+| 5 | one `AuthorDraft` per sender on first sight; **no roster**, no phone, no presence | §12, and [../GOVERNANCE.md](../GOVERNANCE.md) §9 |
 | 6 | removal from the group → `ChannelPrivateError` → `DROP` + `access_state`, **not** a loop | otherwise one removal tombstones the whole conversation |
 
 Enrolment itself is gated: `targets.ack_third_party = 1` is a `CHECK` constraint, not a
@@ -816,12 +833,18 @@ presentation-oriented shape than `to_dict()`, and collides with programmatic tak
 ```
 crawler telegram list-chats          # interactive; PRINTS candidates. Writes nothing.
 crawler targets add tg:@somechannel
-crawler targets add tg:-1001234567890 --ack-third-party --backfill 90d
+crawler targets add tg:-1001234567890 --ack-third-party --retention-days forever \
+                                      --backfill 90d
 ```
+
+Spellings and flags are normative in [../../ARCHITECTURE.md](../../ARCHITECTURE.md) §11.
+`--ack-third-party` **and** `--retention-days` are both required for a conversation target;
+`forever` is a legal answer and enrolment is refused without an explicit one
+([../GOVERNANCE.md](../GOVERNANCE.md) §6.1).
 
 `iter_dialogs()` is confined to `list-chats`. **There is no `--all-dms`, no `--all-dialogs`,
 no `sync-everything` anywhere in the CLI.** The absence is the design — a flag that can be set
-to true is a flag that will be. See [./docs/GOVERNANCE.md](../GOVERNANCE.md) §9.
+to true is a flag that will be. See [../GOVERNANCE.md](../GOVERNANCE.md) §9.
 
 ---
 
@@ -856,7 +879,8 @@ and none of them are in this connector.
 
 ## 17. Testing
 
-Fixtures are `raw_payloads`-shaped, not bespoke test artifacts, and are captured by
+Fixtures are `envelopes`-shaped, not bespoke test artifacts — a fixture *is* an envelope row
+on disk — and are captured by
 `crawler capture --redact` — **never hand-copied**.
 
 ```
@@ -903,10 +927,13 @@ detection — with no network and no session file.
 
 ## 18. Verify before building
 
-Nothing below blocks the design; each is a specific check with a specific consequence.
+**The consolidated list is [../../PLAN.md](../../PLAN.md) §12**; this is the Telegram subset
+with its per-item consequence. **Item 0 blocks the connector outright; nothing else below
+blocks the design.**
 
 | # | Claim | Status | How to settle it |
 |---|---|---|---|
+| **0** | **You can actually obtain an `api_id`/`api_hash` at `my.telegram.org`** | **unverified** — the *Create application* form is reported to fail opaquely for some accounts with a bare `ERROR` (§1) | **T0, day one.** Log in → API development tools → create an application; store the pair in Keychain. **Consequence if it fails: the entire connector is blocked** and Telegram is not connector #2 — the slot changes hands per PLAN §6 M0. This is the one item here that is not merely a number |
 | 1 | Telegram API ToS wording — the "retractable, limited…" licence and the `recover@telegram.org` recourse | **unverified** — search extracts only; core.telegram.org was not fetched | Read core.telegram.org/api/terms and /api/obtaining_api_id in a browser |
 | 2 | The ML-training prohibition and its narrow consent exception | **likely** — corroborated across telegram.org/tos/bot-developers and /api/terms via search; body pages not fetched | Same. This one is load-bearing if any LLM use is contemplated |
 | 3 | Whether a **public channel's history reads without joining** | **unverified** — sources ambiguous | Resolve one throwaway public channel and `iter_messages(limit=5)` without joining. Decides whether the tool must ever perform a join (a medium-risk action) |
@@ -942,7 +969,9 @@ Machinery that arrives with this phase (specified but unbuilt before it):
 - [ ] zstd + trained dictionaries, keyed `(telegram, tg.slice)`
 - [ ] `scrub()` + `assert_clean()` with the Telegram `DROP_KEYS`
 
-Not built here: the spool, the `Receiver`, the billed counter, `Cap.FILE_IMPORT`.
+Not built here: the billed counter (`usage_counters`, arriving with X) and `Cap.FILE_IMPORT`
+(arriving with the X archive at M14). The spool and the `Receiver` are not built **at all** at
+v1 — see §7.
 
 Every one of these is exercised by a source that is **free**, whose credentials are
 **self-issued with no approval gate**, and where a mistake costs a session file rather than

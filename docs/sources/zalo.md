@@ -52,7 +52,7 @@ whether backfill exists at all, whose data it is, and legal posture. A mode flag
 those differences into runtime branches and would invite daily-routine code to assume backfill
 exists when for two of the three it does not.
 
-Registry mechanics are in [../ARCHITECTURE.md](../../ARCHITECTURE.md).
+Registry mechanics are in [../../ARCHITECTURE.md](../../ARCHITECTURE.md).
 
 ```python
 REGISTRY = {
@@ -510,7 +510,7 @@ the purge path is built for every source rather than for Zalo alone.** A raw-fir
 invariant is "never delete the original payload" cannot satisfy it. Telegram and Facebook DMs
 contain the same third parties — they just do not send you a webhook about it.
 
-The resolution is in [./docs/GOVERNANCE.md](../GOVERNANCE.md) §7: `purge --person`,
+The resolution is in [../GOVERNANCE.md](../GOVERNANCE.md) §7: `purge --person`,
 indexed by `authors.actor_hmac`, cascading to items, `item_versions`, media blobs, the FTS
 index and the envelopes; leaving a content-free `redactions` row with `block_reingest = 1` so
 tomorrow's run cannot silently re-create what you just deleted.
@@ -533,10 +533,12 @@ So the identity key is `(source, scope_id, external_id)` where `scope_id` is the
 explicitly manual, user-confirmed** operation, never an implicit join.
 
 The frozen schema already encodes this: `authors` is `UNIQUE (source, actor_hmac)` with
-`actor_hmac = HMAC(source ‖ platform_uid, pepper)`, and cross-platform linking lives in
-`persons` / `author_person_links` with `CHECK (linked_by IN ('manual','self'))` — deliberately
-**no `'inferred'` value**, so automated matching cannot be added without a schema migration.
-For Zalo, `platform_uid` must be namespaced: `zalo.oa:<oa_id>:<user_id>`, not a bare
+`actor_hmac = HMAC(source ‖ platform_uid, pepper)`. **Cross-platform linking is not in the
+schema at all** — no `persons` table, no `author_person_links` — and adding it requires a
+schema migration *and* an ADR ([../DECISIONS.md](../DECISIONS.md) ADR-0023). That pairing is
+the review checkpoint; an earlier draft bought the same checkpoint with two permanently empty
+tables, which was a lot of DDL for a tripwire a written rule buys outright. For Zalo,
+`platform_uid` must be namespaced: `zalo.oa:<oa_id>:<user_id>`, not a bare
 `user_id`. Reddit and X have global user ids; Telegram's are per-bot-scoped; **Zalo is the
 strictest case, which makes it the right one to design the key around.**
 
@@ -556,7 +558,7 @@ removes them too. Lazy fetch on first access is not an option: by then the URL i
 Zalo, re-crawling may be impossible.
 
 This is the same "dead pointer" property Telegram media has (`file_reference` expires) — see
-[./docs/sources/telegram.md](./telegram.md) §11. The replay guarantee covers
+[./telegram.md](./telegram.md) §11. The replay guarantee covers
 **structured content only**, on both sources.
 
 ---
@@ -569,7 +571,7 @@ This is the same "dead pointer" property Telegram media has (`file_reference` ex
 | `zalo.oa` | The user registers a **hộ kinh doanh** or a company and verifies an OA on a paid tier | REST + webhook + a tunnel; the webhook host is the real cost |
 | `zalo.user` | The user **explicitly asks** AND has a secondary account they can afford to lose. Gated behind a hand-edited config flag and `--i-accept-ban-risk`; never started by the scheduler; never on the primary account | Node sidecar + local socket + the exit-code bridge |
 | Selenium on `chat.zalo.me` | **none. Rejected permanently** | — |
-| Manual `.zip` import | Someone demonstrates that Zalo PC's *"Xuất dữ liệu"* archive is machine-readable | `Cap.FILE_IMPORT`, the same shape as the X archive importer and the spool drain |
+| Manual `.zip` import | Someone demonstrates that Zalo PC's *"Xuất dữ liệu"* archive is machine-readable | `Cap.FILE_IMPORT`, the same shape as the X archive importer — a path, no daemon |
 
 The last row is the one worth actively checking: if that `.zip` turns out to be readable, Zalo
 goes from "experimental scraper" to "file importer" and the whole risk picture changes.
@@ -636,6 +638,12 @@ first-party. Listed here so the user can re-check without repeating the search.
 **This section is the most important one in the document.** Zalo's documentation quality is
 poor enough that acting on an unchecked claim is a real risk.
 
+It stays here in full rather than folding into the project-wide checklist, because Zalo's
+unknowns outnumber every other source's combined. [../../PLAN.md](../../PLAN.md) §12 §E
+carries the three worth doing **even while Zalo is deferred** — Z1 (is the Zalo PC export
+`.zip` readable?), Z2 (can an individual complete Bot Platform signup?) and Z3 (does OA
+verification accept a *hộ kinh doanh*?) — and points back here for the rest.
+
 | # | Claim | Status | How to settle it |
 |---|---|---|---|
 | 1 | `listrecentchat` / `conversation` also resolve at `/v3.0/` as third-party SDKs assume | **unverified** | Test both paths against a live token before writing the client |
@@ -693,7 +701,7 @@ retrofit:
 1. Three registry entries (`zalo.oa`, `zalo.bot`, `zalo.user`) with honest
    `capabilities_note()` strings, so the CLI can tell the truth about what is not available.
 2. The `user_withdraw`-shaped **per-subject purge path**, built generically for every source —
-   [./docs/GOVERNANCE.md](../GOVERNANCE.md) §7.
+   [../GOVERNANCE.md](../GOVERNANCE.md) §7.
 3. `containers.content_unavailable`, so the archive can distinguish *"nothing here"* from
    *"something here I cannot read."*
 

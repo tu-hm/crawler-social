@@ -66,40 +66,48 @@ the encryption boundary must be a path, not a predicate.
 | Knob | `broadcast` | `joined` | `conversation` |
 |---|---|---|---|
 | **Store** | `data/social.db` (plain) | `data/social.db` (plain) | `data/private.db` (**SQLCipher**) |
-| `retention_days` (parsed rows) | `NULL` — forever | `730` | `180` |
+| `retention_days` (parsed rows) | `NULL` — forever | `730` | **no default — you must set a number.** `forever` is a legal answer |
 | `raw_mode` | `full` | `full` | **`full`** — see §2.2 |
-| `envelopes.purge_after` | `NULL` — forever | `+90d` | **`+30d`** |
+| `envelopes.purge_after` | `NULL` — forever | `+90d` | **`+90d`** |
 | `media_mode` | `link` | `link` | `link` |
 | media `download` opt-in | per target | per target + mime allowlist + `max_bytes` | per target + `ack_third_party` + allowlist + `max_bytes` |
-| Identity storage | `clear` | `clear` | **`clear`** — see §2.3 |
+| Identity storage | `clear` | `clear` | **`clear`** — see §2.2(c) |
 | `authors.actor_hmac` | always present | always present | always present |
 | Contact PII (phone / email / location / presence) | **dropped** | **dropped** | **dropped** |
 | Member rosters | n/a | **not stored** | **not stored** |
 | Per-person reaction lists | stored | aggregate counts only | aggregate counts only |
 | `on_upstream_delete` | `tombstone` | `follow` | `follow` |
 | `absence_strikes` | `3` | `2` | `2` |
-| `rescan_window_days` | `3` | `7` | `7` |
+| `rescan_window_days` | `3` | `7` | `7` — **but `0` for Facebook and X**, whose coverage claims make absence evidence impossible (§8.3) |
 | First-crawl ingest floor | `--since 90d` | `--since 90d` | **`enrolled_at` — forward only** |
 | `backfill_from` | free | explicit | explicit, **per conversation** |
 | Bulk enrolment command | `--all-pages` ok | `--all-groups` ok | **none exists** |
-| `targets.ack_third_party` | not required | not required | **`= 1`, enforced by `CHECK`** |
-| `containers.viewer_account_id` | optional | optional | **`NOT NULL`, enforced by `CHECK`** |
+| `targets.ack_third_party` | not required | not required | **`= 1`, enforced by two `BEFORE` triggers** (a `CHECK` cannot express it — §3 rule 6) |
+| `containers.viewer_account_id` | optional | optional | **`NOT NULL`, enforced by a real `CHECK`** |
 | Full-text search | yes | yes | **yes — in its own file's index** |
 | `export` default | **included** | denied → `--include-tier joined` | denied → `--include-private` + TTY |
 | Third-party names on export | clear | clear | **pseudonymised** unless `--include-names` |
 | **Envelopes exportable** | yes | yes | **never — no flag exists** |
 
-### 2.2 Three deliberate overrides of the earlier governance draft
+### 2.2 Three deliberate overrides of the earlier governance draft, and one correction
 
 These are frozen decisions and should not be re-litigated.
 
 **(a) `raw_mode = 'full'` for conversations, not `'none'`.** Conversation *envelopes* go to
 `private.db` alongside the parsed rows. Routing parsed DMs to the encrypted file while leaving
-raw TL slices or webhook bodies in the plain file **defeats the entire separation**, because
-raw-first means the payload contains everything the parsed rows contain and more. The exposure
-is bounded by the short `purge_after` (30 days), not by discarding the raw — which would make
-the raw-first promise a lie for exactly the source where re-parsing matters most, since a fresh
-conversation ingest is where parser bugs are most likely.
+raw TL slices in the plain file **defeats the entire separation**, because raw-first means the
+payload contains everything the parsed rows contain and more. The exposure is bounded by
+`purge_after`, not by discarding the raw — which would make the raw-first promise a lie for
+exactly the source where re-parsing matters most, since a fresh conversation ingest is where
+parser bugs are most likely.
+
+**That last clause is why `purge_after` for conversations is 90 days and not 30.** An earlier
+draft set 30, which put the shortest replay window on the class with the highest parser-bug
+rate — the two arguments pointed in opposite directions and the wrong one won. 90 days matches
+`joined`, keeps a realistic "found the bug, fixed the parser, replayed the quarter" cycle
+available, and is still a genuine bound rather than "forever". **State it plainly wherever the
+raw-first promise is made**, because it is a real limit: a parser fix reaches back **90 days**
+on `joined` and `conversation` targets and to the beginning on `broadcast` ones.
 
 **(b) `media_mode = 'link'` everywhere at v1, not `download` for broadcast.** Media is the
 **only unbounded cost in the project**. A 200k-message Telegram channel is tens of MB of text
@@ -108,11 +116,11 @@ Per-target opt-in exists from day one; **never enable it globally.** Trigger: th
 specific target, with a mime allowlist and a `max_bytes` ceiling set in the same command.
 
 State the cost of the default honestly: a stored URL is a **dead pointer** for Telegram
-(`file_reference` expires — [./docs/sources/telegram.md](./sources/telegram.md) §11), Zalo
-(token-bearing `*.zdn.vn` paths — [./docs/sources/zalo.md](./sources/zalo.md) §9.3) and
+(`file_reference` expires — [./sources/telegram.md](./sources/telegram.md) §11), Zalo
+(token-bearing `*.zdn.vn` paths — [./sources/zalo.md](./sources/zalo.md) §9.3) and
 Facebook. **The replay guarantee covers structured content only.**
 
-**(c) `identity_mode = 'clear'` in both files. Pseudonymisation happens at export, not at
+**(c) Identity is stored `clear` in both files. Pseudonymisation happens at export, not at
 storage.** Two reasons, and both are practical rather than principled:
 
 1. A private DM archive full of `P-7f3a` labels is **useless to its owner**, which is the one
@@ -122,8 +130,14 @@ storage.** Two reasons, and both are practical rather than principled:
 
 The controls that actually work are scope, encryption, retention, export gating and purge.
 `authors.actor_hmac` is still always present as the join key, so `purge --person` stays a
-one-liner. Per-target `identity_mode = 'pseudonymous'` remains available for a conversation the
-user wants extra-hardened.
+one-liner.
+
+**There is no per-target `identity_mode` column.** An earlier draft kept one, defaulting to
+`clear`, "available for a conversation the user wants extra-hardened". Nothing anywhere read
+it: `v_items_masked` keys its masking off `containers.privacy = 'conversation' AND
+items.is_from_self = 0`, and export masking is gated on `--include-names`. A governance
+column with a plausible name and no reader is worse than no column, because it reads like a
+control that is running.
 
 ### 2.3 One knob the two-file split killed
 
@@ -150,10 +164,24 @@ Three things fall out at once:
 | 2 | Config may only **raise** sensitivity: `broadcast → joined → conversation` | `PRIVACY_ORDER` comparison in core |
 | 3 | **Lowering** requires `--force-tier` and stamps `privacy_source = 'forced'` **forever** | `containers.privacy_source CHECK (… IN ('connector','config','forced'))` |
 | 4 | Anything unclassifiable resolves to **`conversation`** | `PRIVACY_ORDER[-1]`; `test_privacy_fails_closed` |
-| 5 | A conversation container **must** record which of your accounts was a participant | `CHECK (privacy <> 'conversation' OR viewer_account_id IS NOT NULL)` |
-| 6 | A conversation target **cannot be enrolled** without an explicit human acknowledgement | `CHECK (ack_third_party = 1 OR container_id IN (SELECT id FROM containers WHERE privacy <> 'conversation'))` |
+| 5 | A conversation container **must** record which of your accounts was a participant | a real `CHECK`, and it executes: `CHECK (privacy <> 'conversation' OR viewer_account_id IS NOT NULL)` — it reads only its own row, which is what makes it legal |
+| 6 | A conversation target **cannot be enrolled** without an explicit human acknowledgement | **two `BEFORE` triggers**, `targets_ack_ins` and `targets_ack_upd`. A `CHECK` *cannot* express this — see [./DATA-MODEL.md](./DATA-MODEL.md) §13.1 |
 
 Rule 5 is *"by what right do I hold this?"* expressed as a `NOT NULL` constraint.
+
+**Rules 5 and 6 sit next to each other and are enforced by different mechanisms, so it is
+worth saying which is which.** Rule 5 is a `CHECK` and it works. Rule 6 **cannot** be a
+`CHECK`: SQLite rejects subqueries in `CHECK` constraints outright (`Parse error: subqueries
+prohibited in CHECK constraints`), and an earlier draft of this section specified exactly
+that rejected statement. Two things follow, and the second is the dangerous one:
+
+- The working mechanism is a pair of `BEFORE` triggers. **Both** are needed — an insert
+  trigger alone leaves `UPDATE targets SET ack_third_party = 0` unguarded, which is the half
+  that actually protects the invariant over time. The executed DDL for both is in
+  [./DATA-MODEL.md](./DATA-MODEL.md) §3 under *Containers and targets*; copy it verbatim.
+- **Do not repair the parse error by dropping the second clause.** `CHECK
+  (ack_third_party = 1)` parses cleanly and makes every *broadcast* target unenrollable — a
+  worse outcome than the original bug, reached by the most natural debugging move available.
 
 **Group-size threshold.** `LARGE_GROUP_MEMBERS = 200` separates `joined` from `conversation`
 for chat platforms — **and it only counts when the group also has a public join link.** No
@@ -187,7 +215,7 @@ data/private.db   sqlcipher3       conversation
 
 **One tick can write to both files.** A single Telegram run writes a channel post to
 `social.db` and a DM to `private.db` — see
-[./docs/sources/telegram.md](./sources/telegram.md) §9. That is the case that decided the
+[./sources/telegram.md](./sources/telegram.md) §9. That is the case that decided the
 architecture.
 
 ---
@@ -213,12 +241,12 @@ dishonest.**
 | # | Requirement | Enforcement |
 |---|---|---|
 | 1 | **FileVault is a checked prerequisite, not advice** | `crawler doctor` shells `fdesetup status`. `crawler targets add` **refuses** to enrol a `conversation` target when it is off |
-| 2 | For `broadcast` and `joined`, FileVault **is** the whole answer | no further encryption; keeps `sqlite3 data/social.db ".schema"` and every ad-hoc query in PLAN.md §8 working |
+| 2 | For `broadcast` and `joined`, FileVault **is** the whole answer | no further encryption; keeps `sqlite3 data/social.db ".schema"` and every ad-hoc query in PLAN.md §9 working |
 | 3 | `private.db` is **SQLCipher**, key from the macOS Keychain | `sqlcipher3` **0.6.2** (2026-01-07). `PRAGMA key` is the **first** statement on the connection |
 | 4 | `PRAGMA secure_delete = ON` **at creation** | persistent header flag; setting it later does **not** retroactively zero already-freed pages |
 | 5 | `PRAGMA cipher_memory_security = ON` | |
 | 6 | No DB path may resolve under a synced directory | `doctor` rejects `~/Library/Mobile Documents`, `~/Library/CloudStorage`, `~/Dropbox`, `~/Google Drive`, `~/OneDrive` |
-| 7 | Key + pepper generated once by `crawler init-private`, 32 bytes from `secrets.token_bytes` | never in the DB, never in the repo, never in a plist |
+| 7 | Key + pepper generated once by `crawler init-keys`, 32 bytes from `secrets.token_bytes` each | never in the DB, never in the repo, never in a plist |
 | 8 | `doctor` verifies the pepper resolves and `private.db` opens **before** any conversation crawl | a wrong key fails at `SELECT count(*) FROM sqlite_master`, loudly |
 
 ### 5.3 Library choice, verified
@@ -281,26 +309,56 @@ it is never invisible.
 
 | What expires | Class | Age | Mechanism |
 |---|---|---|---|
-| Parsed rows | `joined` | 730 d | hard delete |
-| Parsed rows | `conversation` | 180 d | hard delete |
 | Parsed rows | `broadcast` | never | — |
+| Parsed rows | `joined` | 730 d | hard delete |
+| Parsed rows | `conversation` | **no default — set explicitly at enrolment** | hard delete, once a number exists |
+| Envelope bodies | `broadcast` | never | — |
 | Envelope bodies | `joined` | 90 d | `envelopes.purge_after`, partial index `idx_env_purge` |
-| Envelope bodies | `conversation` | 30 d | same |
-| Spool files | any | **72 h**, **256 MB quota** | checked by `doctor` |
+| Envelope bodies | `conversation` | 90 d | same |
 
-**The spool is not exempt, and that is deliberate.** `spool/<source>/` holds unencrypted
-third-party message bytes **outside `private.db` and outside its retention sweep** — exactly
-the category of data this document works hardest to bound, sitting in the one place a naive
-design forgets to bound it. Quota and TTL are enforced by `doctor`, and the spool has them from
-the moment it exists.
+### 6.1 Conversation retention has no default, and that is the correction
 
-`targets.retention_days` overrides the class default per target; `NULL` inherits.
+An earlier draft defaulted `conversation.retention_days` to **180 days with an unattended hard
+delete**, swept twice a day at 08:05 and 20:35 with no dry run. Read plainly, that default
+**quietly destroys the DM archive the tool exists to build**: a Telegram or X-archive DM corpus
+would keep roughly six months and then start deleting its own oldest half, forever, on a
+schedule, silently. It is the control most likely to be discovered by *finding data gone*.
+
+It also failed this document's own test. A default that destroys the user's primary goal gets
+switched off in anger on the day it is noticed — which leaves the entire class ungoverned,
+which is a worse outcome than a number the user chose.
+
+So, three changes, and all three are enforced rather than advised:
+
+1. **`conversation.retention_days` is `null` and `retention_days_must_be_explicit: true`.**
+   Enrolling your first conversation target makes you type a number.
+   `crawler targets add` refuses without `--retention-days`. **`forever` is a legal answer**,
+   and so is `365`. The argument for forcing an explicit number here is strictly stronger than
+   the one that already forces it for Reddit.
+2. **The first destructive sweep requires `retention.confirmed: true` in config.** Before that
+   flag is set the sweep runs, prints exactly what it *would* delete, and deletes nothing —
+   the same dry-run-first posture `purge` already has. It made no sense that the *less*
+   destructive verb was the one defaulting to `--dry-run`.
+3. **The numbers are surfaced where a user will actually meet them** — in
+   [../PLAN.md](../PLAN.md) §2 (Scope) and again as a frozen answer with its cost in PLAN §13
+   — rather than only here, in the document nobody reads first.
+
+**Forward-only enrolment and retention are different controls and you need both answers.**
+Forward-only (§9.1) bounds **what enters**. Retention bounds **what stays**. "I'll decide
+backfill later" is genuinely fine, because later is not lossy for anything after enrolment.
+"I'll decide retention later" is not, because the sweep runs unattended twice a day.
+
+`targets.retention_days` overrides the class default per target; `NULL` inherits — except for
+`conversation`, where there is nothing to inherit and enrolment is refused.
 
 ---
 
 ## 7. Purge, and telling the truth about it
 
 ### 7.1 The command surface
+
+Flags and exit codes are normative in [../ARCHITECTURE.md](../ARCHITECTURE.md) §11; this is
+what the verbs *do*.
 
 ```
 crawler purge                                   # --dry-run is the DEFAULT; prints a plan
@@ -313,7 +371,9 @@ crawler forget <target>                         # unenrol + delete + block re-in
 crawler vacuum                                  # secure_delete sweep + VACUUM + wal_checkpoint
 ```
 
-`--dry-run` is the default. Every destructive verb prints a plan first.
+`--dry-run` is the default. **Every destructive operation prints a plan first — including
+the unattended retention sweep**, which deletes nothing until `retention.confirmed: true`
+is set (§6.1).
 
 ### 7.2 Redact a person, as one transaction
 
@@ -401,7 +461,7 @@ Three facts that turn a purge into a false sense of security if you skip them:
 So the tool prints this, rather than a clean success line:
 
 ```
-purged 4,102 items, 118 envelopes, 31 media (conversation, >180d)
+purged 4,102 items, 118 envelopes, 31 media (conversation, >365d)
 vacuumed: private.db 512MB -> 361MB ; wal truncated
 note: APFS local snapshots may still contain the pre-purge file.
       `tmutil listlocalsnapshots /` to inspect. Not doing this for you.
@@ -456,16 +516,41 @@ unreliable, and `UpdatesTooLong` / `ChannelDifferenceTooLong` explicitly mean *"
 enumerate what you missed."* Under any design that gates the sweep on that flag, **DM deletions
 would silently never be detected** — which would make this tool a system that specifically
 defeats other people's deletions. That is the worst possible default for a personal DM archive.
-See [./docs/sources/telegram.md](./sources/telegram.md) §6.
+See [./sources/telegram.md](./sources/telegram.md) §6.
 
-### 8.3 The tension with pacing, named
+### 8.3 Facebook upstream deletes are not detectable, and the re-scan window is 0
 
-The re-scan window is a recurring request cost on exactly the platform where request budget is
-most dangerous — Facebook, where extra automated traffic is what triggers account enforcement.
-`respect-upstream-deletes` and conservative pacing pull against each other there. **Decision:**
-Facebook `joined` targets keep the 7-day window but re-scan **at most once per day**, on the
-morning tick only, never on both. Someone should re-open this consciously if Facebook pacing
-becomes the binding constraint.
+Requirement 3 above is the whole argument: **absence only counts inside a positively-covered
+range, and an `opaque` coverage claim contributes no absence evidence at all.** Facebook
+claims `opaque` on every envelope it will ever emit, because a virtualised feed cannot
+honestly claim an interval (see [./sources/facebook.md](./sources/facebook.md) §1).
+
+Therefore **a Facebook feed re-scan can never accumulate an `absence_streak`.** Not rarely —
+never, by construction. An earlier draft nonetheless gave Facebook a 3-day broadcast / 7-day
+joined re-scan window and a `rescan_once_per_day` override, which spent the scarcest and most
+dangerous budget in the entire project — 200 posts, 25 minutes, no feedback signal, account
+risk as the failure currency — re-scrolling old posts for a signal the design discards on
+arrival.
+
+**Decision: `rescan_window_days = 0` for Facebook, and `rescan_once_per_day` is deleted.**
+Facebook upstream deletes are simply not detected. That is a permanent property of an opaque
+transport, not a gap to close, and it is stated in
+[./sources/facebook.md](./sources/facebook.md) §9 and [../PLAN.md](../PLAN.md) §10 rather than
+implied. [./sources/x.md](./sources/x.md) §3.8 reaches the same conclusion for the same class
+of reason and says so out loud; this now matches.
+
+**The absence sweep therefore arrives with Telegram**, which is the first connector whose
+coverage claims are `exact` and the first where the sweep can accumulate evidence at all.
+
+If per-post Facebook deletion detection is ever wanted, it is a **different feature**: a
+bounded re-navigation to individual permalinks, where "this content isn't available"
+genuinely is absence evidence, with its own item budget. Spec it separately; do not conflate
+it with a feed re-scan, because the two cost different things and only one of them works.
+
+The general tension it was trying to name is still real and still worth remembering: a
+re-scan window is a recurring request cost, and on Facebook request budget is the thing that
+gets accounts flagged. On every other connector the re-scan is cheap and the evidence is
+real, so the trade only ever bit here.
 
 ---
 
@@ -496,7 +581,7 @@ damage limitation for data already in the database; this one keeps it out.
 | 6 | **No member rosters.** `store_rosters: false`, not configurable | A 500-member group's participant list is a contact graph you did not need and cannot justify. Only people who authored a message you kept get an `authors` row |
 | 7 | **Reactions are counts, not identities**, at `joined` and `conversation` | per-person reactor lists are a social graph with ~zero analytical value in a personal archive |
 | 8 | **Forwarded messages** carry an original author who was never in your conversation — same pseudonymisation on export; a channel forward keeps the **channel** name (a public entity), not a personal forwarder | |
-| 9 | **Service messages store the action *kind*, not its participants** | "X added Y to the group" names a third party who may never have written a message. They must still be *persisted* — see [./docs/sources/telegram.md](./sources/telegram.md) §10.4 for why dropping them breaks the absence sweep |
+| 9 | **Service messages store the action *kind*, not its participants** | "X added Y to the group" names a third party who may never have written a message. They must still be *persisted* — see [./sources/telegram.md](./sources/telegram.md) §10.4 for why dropping them breaks the absence sweep |
 | 10 | **Your own messages are exempt.** `is_from_self = 1` rows keep clear identity, are exempt from conversation retention expiry, and are **never masked** on export | Your data is yours. The classes exist to protect the other participant |
 | 11 | `crawler targets --sensitive` lists every conversation target with row count, date range and last crawl | "What am I actually holding about other people?" must be **one command**, not a SQL exercise |
 | 12 | Print that list **unprompted** in the daily run report when a conversation target grew by more than `REVIEW_THRESHOLD = 5000` rows since the last report | |
@@ -504,14 +589,22 @@ damage limitation for data already in the database; this one keeps it out.
 
 ### 9.3 Cross-platform identity linking is off by construction
 
-`persons` and `author_person_links` exist in the DDL with **zero writers** and
-`CHECK (linked_by IN ('manual','self'))` — deliberately **no `'inferred'` value**, so automated
-identity matching cannot be added without a schema migration. That migration is the review
-checkpoint.
+**There is no cross-platform identity linking in the schema at v1**, and adding it is a
+schema migration *and* an ADR. That pairing is the review checkpoint.
 
-The reason is correctness, not caution: Vietnamese given-name distributions are concentrated
-enough that name-based cross-platform matching is near a coin flip, and a wrong link silently
-poisons every query that touches `persons` with no way to tell which rows are affected.
+An earlier draft bought the checkpoint with two empty tables — `persons` and
+`author_person_links`, carrying `CHECK (linked_by IN ('manual','self'))` with deliberately no
+`'inferred'` value, so automated matching could not be added without a migration. The
+reasoning was right and the mechanism was expensive: two tables, a composite foreign key and
+a `CHECK`, with **zero declared writers**, to buy a tripwire that a written rule buys for
+free. The rule now lives in [./DECISIONS.md](./DECISIONS.md) ADR-0023 and the deferred row
+with its trigger is in [../PLAN.md](../PLAN.md) §11.
+
+The underlying reason is correctness, not caution: Vietnamese given-name distributions are
+concentrated enough that name-based cross-platform matching is near a coin flip, and a wrong
+link silently poisons every query that reads it with no way to tell which rows are affected.
+`authors.actor_hmac` remains the per-source join key and is enough for everything the tool
+actually does, including `purge --person`.
 
 ### 9.4 Pseudonymisation is pseudonymisation, and the docs must say so
 
@@ -645,7 +738,7 @@ not a criminal statute: the realistic consequence is account enforcement — che
 block, disablement — not prosecution. *hiQ v. LinkedIn* (9th Cir.) held that scraping genuinely
 public data is not CFAA "unauthorized access", but that is US law, says nothing about breach of
 contract, and does not reach content behind a login — which is exactly what a private group is.
-PLAN.md §1 already states this correctly and its risk statement is kept verbatim.
+PLAN.md §3 already states this correctly and its risk statement is kept verbatim.
 
 **Reddit — the only officially clean path, with retention strings attached.** Official Data
 API, official OAuth, published terms. Two things reshape this document. First, self-service app
@@ -662,8 +755,17 @@ Data API Wiki was unreachable.)* **Design consequence, already implemented:**
 knowingly** rather than inheriting the broadcast "forever" default.
 
 **X — a pricing question, not a legal one.** Automated access through the official API is
-permitted; scraping is prohibited. **Every price figure in circulation is third-party
-reporting.** *(unverified — `docs.x.com` was not fetched.)* The governance-relevant fact is
+permitted; scraping is prohibited. On price: **the published figures are `[verified]`.** Two
+independent recon passes fetched `docs.x.com/x-api/getting-started/pricing` on 2026-09-01 and
+agree on all of it — `$0.005` per Post read, `$0.010` per User, `$0.010` per DM Event,
+`$0.001` for owned reads, *"capped at 3 million Post reads per monthly billing cycle"*, and
+*"deduplicated within a 24-hour UTC day window"*. An earlier version of this paragraph called
+every figure third-party reporting; that was stale, and leaving it would have pushed a reader
+to re-derive a correct number from a vendor blog, which is the exact failure
+[./sources/x.md](./sources/x.md) §3.1 warns against. The operative instruction is unchanged
+and is about a different thing: **`console.x.com` is the billing authority, docs lag, and the
+cap is typed in dollars** — reconcile there before `enabled: true`. The governance-relevant
+fact is
 different: **X DMs come exclusively from the free data-archive ZIP, never from the DM Events
 API.** It is free, complete (no ~3,200-post ceiling), zero ToS risk, and has **far better
 provenance** — an export the user personally requested for their own account, versus an OAuth
@@ -698,7 +800,7 @@ Zalo's ToS says; the claim that unofficial clients violate Zalo policy comes fro
 libraries' own disclaimers and community consensus. Zalo is the one source that **actively
 pushes data-subject-rights requests at you** via the `user_withdraw` webhook, which is why the
 per-subject purge path in §7 is built generically for every source. See
-[./docs/sources/zalo.md](./sources/zalo.md).
+[./sources/zalo.md](./sources/zalo.md).
 
 ---
 
@@ -754,6 +856,11 @@ rather than default-warn.
 9. The absence sweep is a **no-op** when `containers.access_state <> 'ok'` or
    `runs.status <> 'ok'`.
 10. `on_upstream_delete` cannot be overridden for Reddit (`delete_policy_locked`).
+11. **Both** `targets_ack_ins` **and** `targets_ack_upd` ABORT — the insert path *and*
+    `UPDATE targets SET ack_third_party = 0` (§3 rule 6). Verified on 3.51.0.
+12. **The retention sweep deletes zero rows while `retention.confirmed` is false**, and
+    prints its plan (§6.1).
+13. `crawler targets add` **refuses** a conversation target with no `--retention-days`.
 
 ---
 
@@ -766,12 +873,15 @@ governance:
   review_threshold_rows: 5000
   store_rosters: false              # not configurable
   first_crawl_since_days: 90        # broadcast + joined; conversation is enrolled_at
-  pepper_keychain_service:     crawler-social-pepper
-  private_db_keychain_service: crawler-social-private
+  # Keychain service names are RUNTIME IDENTIFIERS. One convention, reverse-DNS,
+  # matching the LaunchAgent label -- see ARCHITECTURE.md §12.
+  pepper_keychain_service:     vn.moonbase.crawler-social.pepper
+  private_db_keychain_service: vn.moonbase.crawler-social.private-db
 
-  spool:
-    quota_bytes: 268435456          # 256 MB
-    ttl_hours: 72
+  retention:
+    confirmed: false                # the first DESTRUCTIVE sweep requires true.
+                                    # until then the sweep prints its plan and deletes
+                                    # nothing. See 6.1.
 
   classes:
     broadcast:
@@ -781,8 +891,9 @@ governance:
       raw_purge_after_days: null
       media_mode: link
       media_max_bytes: null
-      media_mime_allow: []
-      identity_mode: clear
+      media_mime_allow: []          # empty at v1: media_mode is `link` everywhere, so the
+                                    # allowlist and media_max_bytes only take effect when a
+                                    # named target opts into `download`
       on_upstream_delete: tombstone
       absence_strikes: 3
       rescan_window_days: 3
@@ -794,7 +905,6 @@ governance:
       raw_mode: full
       raw_purge_after_days: 90
       media_mode: link
-      identity_mode: clear
       on_upstream_delete: follow
       absence_strikes: 2
       rescan_window_days: 7
@@ -802,63 +912,96 @@ governance:
 
     conversation:
       store: private.db             # sqlcipher3 0.6.2, key from Keychain
-      retention_days: 180
+      retention_days: null          # NO DEFAULT. See 6.1 -- must be set at enrolment.
+      retention_days_must_be_explicit: true
       raw_mode: full                # envelopes go to private.db too
-      raw_purge_after_days: 30
+      raw_purge_after_days: 90      # was 30; see 2.2(a). Conversations are where parser
+                                    # bugs are most likely, so they need a real replay window
       media_mode: link
-      identity_mode: clear          # pseudonymised at EXPORT, not at storage
       on_upstream_delete: follow
       absence_strikes: 2
       rescan_window_days: 7
       exportable: false             # needs --include-private + a TTY
       backfill: false               # forward-only from targets.enrolled_at
-      requires_ack: true            # targets.ack_third_party = 1, CHECK-enforced
+      requires_ack: true            # targets.ack_third_party = 1, TRIGGER-enforced (3.6)
 
   platform_overrides:
     reddit:
       on_upstream_delete: follow
       delete_policy_locked: true        # CLI override is refused
       retention_days_must_be_explicit: true
+      # Note: conversation targets carry this flag too (see the class block above). The
+      # argument for forcing an explicit number is stronger there than it is here.
     telegram:
       no_ml_training: true              # surfaced in the export manifest
       delete_events: false              # Cap.DELETE_EVENTS unset -> sweep is mandatory
     facebook:
-      rescan_once_per_day: true         # see 8.3
+      rescan_window_days: 0             # upstream deletes are NOT detectable here; an
+                                        # `opaque` coverage claim yields no absence evidence
+                                        # at all, so a re-scan spends the project's scarcest
+                                        # budget for nothing. See 8.3.
     x:
       dm_source: archive_zip_only       # never the DM Events API
+      rescan_window_days: 0             # same reason as facebook: nothing is ever
+                                        # re-observed, so absence_streak never increments
+      spend_cap_metric: cost_micros     # the ONLY value; usage_counters.metric is
+                                        # CHECK-constrained to it
     zalo:
       experimental: true                # hand-edited enable flag required
       min_privacy: conversation
 ```
 
-**Command surface this layer adds:**
+**Command surface this layer adds.** Spellings, flags and exit codes are normative in
+[../ARCHITECTURE.md](../ARCHITECTURE.md) §11 — this list names the subset that exists *for*
+governance and does not define any of it.
 
 ```
-crawler init-private                       # generate the private.db key + pepper, once
+crawler init-keys                          # generate the private.db key + the pepper, once
 crawler doctor                             # + fdesetup, pepper resolves, private.db opens,
-                                           #   FTS5 present, no synced DB path, spool quota
-crawler targets add <spec> [--ack-third-party] [--backfill 90d|all]
-                          [--force-tier X] [--media download --mime image/jpeg --max-bytes N]
-crawler targets --sensitive                # what am I holding about other people
+                                           #   FTS5-in-SQLCipher answer, no synced DB path
+crawler targets add <spec> --ack-third-party --retention-days N|forever
+                          [--backfill 90d|all] [--force-tier X]
+                          [--media download --mime image/jpeg --max-bytes N]
+crawler targets list --sensitive           # what am I holding about other people
 crawler purge [--dry-run|--apply] [--target|--privacy|--person|--before|--older-than]
 crawler forget <target>                    # unenrol + delete + block re-ingest
 crawler vacuum                             # secure_delete sweep, VACUUM, wal_checkpoint(TRUNCATE)
 crawler export [--include-tier joined] [--include-private] [--include-names] --out PATH
 ```
 
+`--ack-third-party` **and** `--retention-days` are both required for a conversation target;
+the command refuses without either, and refuses again if `fdesetup status` reports FileVault
+off.
+
 ---
 
 ## 17. Verify before building
 
-| # | Claim | Status | How to settle it |
-|---|---|---|---|
-| 1 | Whether the vendored SQLCipher in `sqlcipher3` 0.6.2 has **FTS5** | **unverified** | `SELECT * FROM pragma_compile_options();` at M0. If absent, `private.db` full-text search needs a separate index — nothing else changes |
-| 2 | Whether macOS Keychain ACLs (`security -T <binary>`) meaningfully restrict access when the caller is a `uv run python` process rather than a signed binary | **unverified** | Test it. If they do not hold, the unattended-read convenience is a real weakening and §5.4 must say so |
-| 3 | Reddit's exact retention obligation — the "48 hours" figure and the "even if disassociated, de-identified or anonymized" clause | **unverified** — primary Data API Terms unreachable (403) | Read them first-hand **before** fixing Reddit's retention default in code |
-| 4 | Reddit's Responsible Builder Policy and the closure of self-service registration | **likely** — secondary sources; the official help article exists but 403s | Confirm before designing Reddit onboarding |
-| 5 | Telegram's API ToS licence wording and the `recover@telegram.org` recourse | **unverified** — search extracts only | Read `core.telegram.org/api/terms` in a browser |
-| 6 | Telegram's ML-training prohibition **and its consent exception** | **likely** — corroborated across two Telegram ToS pages via search; bodies not fetched | Load-bearing if any LLM use is contemplated. Re-read before relying on the exception |
-| 7 | Whether Vietnam's PDPL contains a purely-personal / household exemption | **unverified at article level** | The design does not rely on it. Confirm only if scope ever matters |
-| 8 | Meta ToS §3.2 exact wording | **likely** — quoted second-hand | Read `facebook.com/legal/terms` manually. **Not** via the tool |
-| 9 | Zalo's ToS clause on automated access | **not located** | Do not assert what it says (§13) |
-| 10 | Every X price and quota figure | **unverified** — vendor blogs only | Confirm at `console.x.com` **before** the X connector is enabled. It is the only connector where a bug costs money |
+**The consolidated checklist is [../PLAN.md](../PLAN.md) §12** — every unverified claim in
+every document, with how to check it, how long it takes and what it blocks. Working from one
+list is the point: four overlapping lists is how "every X price figure is third-party
+reporting" survived here for a week after `docs.x.com` had been fetched twice.
+
+The four rows below are the ones whose *governance* consequence needs stating next to the
+policy they affect. Their status and their check live in PLAN §12.
+
+| Claim | PLAN §12 row | Governance consequence if it goes the other way |
+|---|---|---|
+| FTS5 in the vendored SQLCipher build | **B1** | **Not "nothing else changes."** Without FTS5 the statement list cannot be applied to `private.db` at all, which breaks the identical-DDL invariant. The fork is written out in [./DATA-MODEL.md](./DATA-MODEL.md) §14 item 1: same DDL minus the five FTS objects, the divergence recorded in `schema_versions` as a **declared state**, and `crawler search --private` degrading to a `LIKE` scan. Conversations stay searchable either way, which is the flaw ADR-0024 rejected |
+| Keychain ACLs (`security -T <binary>`) restricting a `uv run python` caller | **C25** | If they do not hold, the unattended-read convenience the LaunchAgent depends on is a **real weakening** and §5.4 must say so in those words. Do not imply protection you have not tested |
+| Reddit's deletion obligation — the "48 hours" figure and the "even if disassociated, de-identified or anonymized" clause | **D2** | Read it first-hand **before** fixing Reddit's retention default in code. Ship `on_upstream_delete='follow'` locked regardless: it is the conservative default and costs nothing if the wording turns out milder |
+| Whether Vietnam's PDPL carries a purely-personal / household exemption | **D7** | **The design does not rely on it**, and that is deliberate — the tool stores third parties' messages either way, so the class model, forward-only enrolment, the purge path and export gating are the right controls with or without the exemption |
+
+**The X pricing row is closed.** `docs.x.com` was fetched on 2026-09-01 by two independent
+recon passes that agree on every figure (§13). What remains is not verification but
+reconciliation: **`console.x.com` is what bills you**, so confirm there before `enabled:
+true`, and keep the cap typed in dollars.
+
+---
+
+*Companion documents: [../README.md](../README.md) (what this repo is and the reading order) ·
+[../PLAN.md](../PLAN.md) (scope, milestones, the deferred list, the verify checklist, the open
+questions) · [../ARCHITECTURE.md](../ARCHITECTURE.md) (the connector contract and the CLI
+surface) · [./DATA-MODEL.md](./DATA-MODEL.md) (the frozen DDL — the only copy) ·
+[./DECISIONS.md](./DECISIONS.md) (why each of these is frozen) · [./sources/](./sources/)
+(per-connector evidence).*

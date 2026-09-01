@@ -225,7 +225,7 @@ The connector contributes **zero** gap-detection code. It only tells the truth a
 
 > `listings hard-stop at ~1000 items via 'after' fullnames; there is no page 11. Backfill beyond that comes from Arctic Shift (archive, ~36h stale metrics), not from Reddit. Deep history for a specific subreddit: pull the monthly .zst dump.`
 
-`Cap.BACKFILL_CAPPED` is set, not `Cap.BACKFILL`. `crawler tick --source reddit --since 2y` prints the ceiling and proceeds rather than silently returning a truncated archive.
+`Cap.BACKFILL_CAPPED` is set, not `Cap.BACKFILL` — and **the capped flag implies the plain one for CLI argument validation**, so `crawler crawl --source reddit --target r/vietnam --since 2y` is accepted, prints the ceiling and proceeds rather than being rejected at argument parsing or silently returning a truncated archive. Command spellings are normative in [../../ARCHITECTURE.md](../../ARCHITECTURE.md) §11.
 
 ---
 
@@ -313,7 +313,7 @@ Items whose content came from the archive are still ordinary `items` rows. Prove
 
 `[verified]` Arctic Shift is **one volunteer's donation-funded free service with no uptime or performance guarantee**, and this design gives it a load-bearing backfill role. Mitigations, in order:
 
-1. **The dumps are the artifact; the API is convenience.** Deferred item `ARCTIC SHIFT BULK .ZST DUMPS pulled to local disk` has a stated trigger: *the gaps table has an unfilled row older than 30 days, or Arctic Shift's API becomes unreliable.* Honour it.
+1. **The dumps are the artifact; the API is convenience.** *Arctic Shift bulk `.zst` dumps pulled to local disk* is a deferred item in [../../PLAN.md](../../PLAN.md) §11 with a stated trigger: **an unfilled `gaps` row older than 30 days, or Arctic Shift's API becoming unreliable.** Honour it.
 2. `[unverified]` **Spot-check coverage before trusting it for a specific subreddit** — `GET /api/time_series?key=r/<sub>/posts/count&precision=day` against your own item counts.
 3. Never let a Reddit gap-drain failure fail the Reddit tick. It is a separate run (`runs.mode = 'backfill'`) and its failure is `RETRY`, not `STOP`.
 
@@ -374,8 +374,11 @@ Either rolls back the cursor write and sets `runs.status='suspect'`. Two consecu
 ### 7.5 Capability flags
 
 ```python
-caps = (Cap.BACKFILL_CAPPED | Cap.EXACT_CURSOR | Cap.COMMENT_TREE
-        | Cap.MUTABLE_METRICS | Cap.PARALLEL_TARGETS)
+caps = (Cap.BACKFILL_CAPPED      # implies BACKFILL for CLI argument validation
+        | Cap.NEEDS_HUMAN_LOGIN   # `crawler login --source reddit` mints the refresh token
+        | Cap.COMMENT_TREE
+        | Cap.MUTABLE_METRICS
+        | Cap.PARALLEL_TARGETS)
 ```
 
 Not set, deliberately:
@@ -383,13 +386,14 @@ Not set, deliberately:
 | Flag | Why not |
 |---|---|
 | `Cap.BACKFILL` | the 1,000 wall — `BACKFILL_CAPPED` is the honest value |
-| `Cap.NEEDS_SESSION`, `NEEDS_GUI`, `SINGLE_FLIGHT`, `NEEDS_HUMAN_LOGIN` | stateless HTTP; `login()` is a one-off CLI command, not a per-run need |
-| `Cap.PUSH`, `Cap.FILE_IMPORT` | no receiver, no spool, no archive ZIP |
+| `Cap.NEEDS_SESSION`, `NEEDS_GUI`, `SINGLE_FLIGHT` | stateless HTTP; nothing to serialise, no GUI, no file lock |
+| **`Cap.EXACT_CURSOR`** | **not set, deliberately.** The flag means *resume needs no overlap re-read at all* — and this connector keeps a **6-hour overlap** on purpose (§7.3 step 4) as cheap insurance against clock skew, sticky posts and remove-then-reinstate. An earlier draft set the flag and redefined it locally to mean "no *unbounded* re-read", which would have had core skip the very window the design relies on. **The coverage claim is a separate axis:** listing envelopes still claim `Coverage(EXACT)` on their own honesty about what their bytes contain, and that is unaffected |
+| `Cap.FILE_IMPORT` | no archive ZIP. *(There is no `Cap.PUSH` in the enum at all — ARCHITECTURE §6.)* |
 | `Cap.DELETE_EVENTS` | Reddit reports no deletion events — **the absence sweep stays mandatory** |
 | `Cap.BILLED` | free tier; nothing to meter in `usage_counters` |
 | `Cap.CONVERSATIONS` | never writes `private.db` (§3) |
 
-`Cap.EXACT_CURSOR` is set on the strength of the 6h overlap: resume needs no *unbounded* re-read, only a bounded one. `Cap.PARALLEL_TARGETS` is set — subreddits are independent and there is no session to contend for — but the token bucket is shared across them, so parallelism buys latency, not throughput.
+`Cap.PARALLEL_TARGETS` is set — subreddits are independent and there is no session to contend for — but the token bucket is shared across them, so parallelism buys latency, not throughput.
 
 ---
 
@@ -581,7 +585,7 @@ Deleted-parent case: if the ancestor was itself deleted and never ingested, `par
 
 `author == '[deleted]'` produces **no author row**. `items.author_id` stays NULL and `visibility` moves per §11.2. Do not mint a synthetic `[deleted]` author — it would collect thousands of unrelated people under one identity.
 
-`identity_mode` defaults to `clear` (frozen decision: pseudonymization happens at export, not at storage). Reddit usernames are public handles; storing them clear in `social.db` is the correct default and `authors.actor_hmac` still makes `purge --person` a one-liner.
+Identity is stored `clear` — a frozen decision, and there is no per-target `identity_mode` column (ADR-0026). Reddit usernames are public handles; storing them clear in `social.db` is the correct default, masking happens in `v_items_masked` at export time, and `authors.actor_hmac` still makes `purge --person` a one-liner.
 
 ### 10.5 Metrics
 
@@ -612,9 +616,15 @@ Change-log, not sample-log. A row is written **only when the value moved**.
 
 `envelopes.codec` = `'zlib'` at v1. Reddit listings are small JSON records — exactly the case where the deferred zstd + trained dictionary work (`zdict` keyed on `(source, kind)`) shows the measured 5.5× vs zlib's 1.8×. The `codec` and `dict_id` columns exist from day one so that switch is a flag flip, not a migration. `[likely]` Trigger: connector two lands (Telegram), per the deferred list.
 
-`envelopes` (one row per **distinct byte sequence**, `sha256` UNIQUE) is split from `envelope_fetches` (one row per **fetch event**). Reddit exercises this split hard: `/api/info` on 3,000 unchanged posts returns byte-identical responses day after day. Without the split, "when did I last confirm this post still existed" — the exact input to the absence sweep — is destroyed.
+`envelopes` (one row per **distinct byte sequence**, `sha256` UNIQUE) is split from `envelope_fetches` (one row per **fetch event**). **Reddit is the connector that exercises this split**, and it is the worked example in [../DATA-MODEL.md](../DATA-MODEL.md) §7 for that reason. Be precise about when it fires, though: a `/api/info` batch is byte-identical only while **nothing in it moved** — scores are mutable and possibly vote-fuzzed (§10.5), so a batch of week-old posts is commonly identical and a batch of fresh ones rarely is. That is exactly the shape the decaying re-observation ladder assumes. Without the split, "when did I last confirm this post still existed" — the exact input to the absence sweep — is destroyed on the identical-response case.
 
-`[likely]` **Compaction risk, named now:** 3,000 tracked items re-observed daily is over a million envelope rows a year whose entire information content is "still 220". The deferred `COMPACTION PASS` (collapse runs of byte-identical envelopes for one target into one row plus an occurrence count) has trigger *either database file crosses 10 GB*. Reddit is the connector most likely to trip it.
+**Envelope growth, with the arithmetic done.** An earlier draft of this section claimed "3,000 tracked items re-observed daily is over a million envelope rows a year" and used it to justify a deferred compaction pass. That number contradicted this document's own budget table 170 lines earlier and was wrong by roughly two orders of magnitude. The honest figures:
+
+- **Metric re-observation is batched** at ~100 fullnames per `/api/info` call, so 3,000 tracked posts cost **~30 requests a day** (§8.3) — and one request is one envelope. ~11,000 envelope rows a year, not 1.1M.
+- **The schedule stops.** `+1h / +6h / +24h / +72h / +7d, then stop` means each item generates **five** refresh events total. Nothing is re-observed daily forever.
+- **Byte-identical responses create `envelope_fetches` rows (~40 bytes), not `envelopes` rows.** That is the entire point of the split above.
+
+So the growth term that matters is `envelope_fetches`, plus Facebook's HTML snapshots at ~50 KB compressed per scroll step. **The compaction pass is dropped, not deferred** ([../../PLAN.md](../../PLAN.md) §11): the retention sweep and `envelopes.purge_after` already bound the store, and a trigger sized against a hundredfold-inflated number is worse than no trigger.
 
 ### 10.7 Bookkeeping
 
@@ -666,7 +676,7 @@ GovernanceProfile(
     delete_policy_locked = True,               # the CLI override is REFUSED
     absence_strikes      = 3,
     rescan_window_days   = 3,
-    retention_days       = <must be set explicitly for reddit, not inherited>,
+    retention_days       = <must be set explicitly for reddit; retention_days_must_be_explicit>,
     media_mode           = MEDIA_LINK,
     exportable           = True,
 )
@@ -770,7 +780,7 @@ Three tiers, all offline:
 
 ## 14. Verify before building
 
-Ordered by what blocks what. Items 1–2 gate the connector's existence; 3–7 gate correctness; 8–12 are cheap confirmations.
+**The consolidated list is [../../PLAN.md](../../PLAN.md) §12**; this is the Reddit subset with its per-item consequence. Ordered by what blocks what. Items 1–2 gate the connector's existence; 3–7 gate correctness; 8–12 are cheap confirmations.
 
 | # | Claim | Confidence | How to settle it | Blocks |
 |---|---|---|---|---|
@@ -783,7 +793,7 @@ Ordered by what blocks what. Items 1–2 gate the connector's existence; 3–7 g
 | 7 | Vote fuzzing is still active | `[unverified]` | fetch one post's score 5× in a minute; compare | whether `approximate=1` is honest (keep it either way) |
 | 8 | `syntax=cloudsearch` + `timestamp:START..END` still functions | `[unverified]` | **one query.** If it works it is a bonus fast path. Nothing depends on it. | nothing |
 | 9 | Arctic Shift coverage for *your* target subreddits | `[unverified]` | `GET /api/time_series?key=r/<sub>/posts/count&precision=day` vs your own counts | trust in the gap drain |
-| 10 | The 5 Aug 2026 r/redditdev post and the **30 September 2026** registration deadline | `[likely]` | check directly — **it is this month**; free to comply with if a grandfathered app exists | optionality only |
+| 10 | The 5 Aug 2026 r/redditdev post and **two** dates from it: **30 September 2026** (register an existing/grandfathered app so its feedback counts) and **31 December 2026** (deadline to opt into Reddit's Migration Program) | `[likely]` — both second-hand | Check directly — **30 September is this month**, and **31 December is the one that decides whether an approved app survives into 2027**, which is exactly the kind of date discovered after it has passed. Both are dated checkboxes in [../../PLAN.md](../../PLAN.md) §6 M0 | optionality into 2027 |
 | 11 | Current RSS rate limit and the `user=`/`feed=` workaround | `[unverified]` | only if R0 fails; the workaround is a community finding, not documented | §12 only |
 | 12 | Commercial pricing ($0.24/1k calls; ~$12,000 minimum) | `[unverified]` | do not quote these. Reddit publishes no rate card. | nothing — recorded so it is not repeated as fact |
 
@@ -796,7 +806,7 @@ Ordered by what blocks what. Items 1–2 gate the connector's existence; 3–7 g
 | Risk | Why it matters here |
 |---|---|
 | **Credential risk is existential and outside the user's control.** | If R0 is declined, the full-fidelity connector does not exist. **Do not let any Facebook or Telegram milestone depend on Reddit's schema landing on time.** |
-| **Platform-direction risk on a short clock.** | `[likely]` Reddit stated on 5 Aug 2026 that the public Data API is on a path toward gradual restriction in favour of Devvit, with a 30 Sep 2026 registration deadline. "Nothing changes this year" — but *"the API you build on is on a deprecation path"* is a fact worth writing down rather than discovering in 2027. |
+| **Platform-direction risk on a short clock.** | `[likely]` Reddit stated on 5 Aug 2026 that the public Data API is on a path toward gradual restriction in favour of Devvit, with **30 Sep 2026** to register an existing app and **31 Dec 2026** to opt into the Migration Program `[likely]` — *check both directly*. "Nothing changes this year" — but *"the API you build on is on a deprecation path"* is a fact worth writing down rather than discovering in 2027. |
 | **Deletion obligation vs raw-first.** | Not resolvable by wishful wording. Build the sweep in the same milestone as ingest, or neither. |
 | **Arctic Shift is a single point of failure.** | One volunteer, donation-funded, no uptime guarantee, carrying the load-bearing backfill role. Mitigation is the local `.zst` dumps, and its trigger is already written into the deferred list. |
 | **Archive metric lag silently corrupts time series.** | Only `source_kind` prevents it. Never let a connector write an archive-sourced metric without it. |
@@ -806,4 +816,4 @@ Ordered by what blocks what. Items 1–2 gate the connector's existence; 3–7 g
 
 ---
 
-*See also: [../DATA-MODEL.md](../DATA-MODEL.md) for the full DDL and the canonical queries · [../ARCHITECTURE.md](../ARCHITECTURE.md) for the connector contract, `Envelope`, `Coverage`, `Budget` and the verdict taxonomy · [./x.md](./x.md) for the other REST connector, and the contrast between a quota governor and a spend governor.*
+*See also: [../DATA-MODEL.md](../DATA-MODEL.md) for the full DDL and the canonical queries · [../../ARCHITECTURE.md](../../ARCHITECTURE.md) for the connector contract, `Envelope`, `Coverage`, `Budget` and the verdict taxonomy · [./x.md](./x.md) for the other REST connector, and the contrast between a quota governor and a spend governor.*

@@ -22,7 +22,7 @@ The old answer — "X is not worth it at personal scale" — was correct under t
 
 **Do not defer the billed half into vapour, and do not pad it into a fake-complete spec.** §3 is exactly as long as it needs to be to enable safely: the pricing table, the spend governor, the defaults that are spending decisions, and the trigger. It is not an endpoint catalogue.
 
-**Confidence convention.** `[verified]` = read from a primary source. `[likely]` = consistent secondary sources, no primary. `[unverified]` = confirm before relying on it. Recon fetched `docs.x.com/x-api/getting-started/pricing` and `docs.x.com/x-api/fundamentals/rate-limits` on **2026-09-01**; those are the `[verified]` price and rate figures below. **The console at `console.x.com` is the only authority on what you will actually be billed** — confirm there before flipping the switch. This document makes no request to `x.com` or any of its subdomains.
+**Confidence convention.** `[verified]` = read from a primary source. `[likely]` = consistent secondary sources, no primary. `[unverified]` = confirm before relying on it. **Two independent recon passes** fetched `docs.x.com/x-api/getting-started/pricing` and `docs.x.com/x-api/fundamentals/rate-limits` on **2026-09-01** and agree on every figure, including the `3,000,000`-read monthly cap and the 24-hour UTC dedup window; those are the `[verified]` price and rate figures below, and every other document in this set now says the same. **The published figures being verified is a different claim from the console charging them.** `console.x.com` is the billing authority, docs lag, and the spend cap is therefore typed in **dollars** at enable time rather than derived from a price this document believes — confirm there before flipping the switch. This document makes no request to `x.com` or any of its subdomains.
 
 ---
 
@@ -82,10 +82,10 @@ def propose_privacy(self, draft: TargetDraft) -> str:
 Consequences, all of which fall out of the frozen design with **zero X-specific code**:
 
 - DM containers get `shape='conversation'`, land in `private.db`, and **their envelopes land there too**. Routing parsed DMs to the encrypted file while the raw ZIP slice sits in `social.db` would defeat the whole separation — raw-first means the payload contains everything the parsed rows do and more.
-- `containers.viewer_account_id NOT NULL` is enforced by CHECK. "By what right do I hold this?" as a constraint.
-- `targets.ack_third_party = 1` is required by CHECK before a conversation target can be enrolled.
+- `containers.viewer_account_id NOT NULL` **is** a real `CHECK` and it executes. "By what right do I hold this?" as a constraint.
+- `targets.ack_third_party = 1` is required before a conversation target can be enrolled — enforced by **two `BEFORE` triggers**, not a `CHECK`; SQLite rejects subqueries in `CHECK` constraints (see [../DATA-MODEL.md](../DATA-MODEL.md) §13.1).
 - `enrolled_at` is the forward-only floor. For an archive import the user is deliberately choosing to backfill, so `backfill_from` is set explicitly — **per conversation, never in bulk.** There is no `--all-dms`.
-- `crawler add` **refuses** to enrol a conversation target if `fdesetup status` reports FileVault off.
+- `crawler targets add` **refuses** to enrol a conversation target if `fdesetup status` reports FileVault off, and refuses again without an explicit `--retention-days`. Command spellings are normative in [../../ARCHITECTURE.md](../../ARCHITECTURE.md) §11.
 - Conversation envelopes are **not exportable at all**. No flag exists.
 
 The one X-specific decision: **a single ZIP produces both privacy halves in one import run.** That is the same property that made Telegram the architecture's decisive test case (one connector, one session, broadcast channels *and* private DMs), arriving a second time. If the two-file router works for Telegram in Phase 2, X's archive importer needs no new machinery in Phase 4 — which is a good reason to build them in that order.
@@ -96,8 +96,14 @@ The one X-specific decision: **a single ZIP produces both privacy halves in one 
 
 **Do not write the parser from memory. Open one ZIP first.** Concretely, before Phase 4a:
 
-1. Request the archive. Wait ~24h.
-2. `unzip -l` it and record the actual manifest of files.
+1. **Request the archive on day one, not when you reach Phase 4a.** This is **X0** in
+   [../../PLAN.md](../../PLAN.md) §6 M0, and it belongs there for the same reason R0 does:
+   it is free, it carries zero ToS risk, and the answer takes ~24h (up to 48h for a large
+   account) to arrive. **The download link expires 7 days after generation** — download it
+   immediately and keep it outside the worktree. Request it at M15 instead and you will
+   discover the expiry, wait another day, and have closed nothing in the meantime.
+2. `unzip -l` it and paste the real manifest into §2.3 below. One command closes this
+   connector's largest unknown.
 3. Read `TheExGenesis/community-archive`'s parser as prior art.
 4. *Then* write `parse()`, and capture the fixtures from that real ZIP with `crawler capture --redact`.
 
@@ -198,8 +204,10 @@ rate:
       timeline: { capacity: 20, refill_per_sec: 1.0 }    # nowhere near binding, §3.5
     spend_cap:
       period: month
-      metric: cost_micros
-      limit:  25_000_000     # $25.00/month, ~1.7x the median estimate
+      metric: cost_micros    # the ONLY value; usage_counters.metric is CHECK-constrained
+      limit_usd: 25.00       # TYPED IN DOLLARS at enable time, stored as micros.
+                             # Deliberately not derived from a per-post price this plan
+                             # believes: a repricing must not silently widen the cap.
       on_cap: stop_and_alert # STOP, not WAIT. Never fall back to anything.
 ```
 
@@ -312,7 +320,16 @@ The daily poll itself costs nothing beyond the resources returned — an account
 caps = (Cap.FILE_IMPORT | Cap.BACKFILL | Cap.CONVERSATIONS)
 
 # x.rest
-caps = (Cap.BACKFILL_CAPPED | Cap.EXACT_CURSOR | Cap.PARALLEL_TARGETS | Cap.BILLED)
+caps = (Cap.BACKFILL_CAPPED      # ~3,200-post ceiling; implies BACKFILL for CLI validation
+        | Cap.EXACT_CURSOR       # Snowflake since_id: resume genuinely re-reads NOTHING
+        | Cap.NEEDS_HUMAN_LOGIN  # `crawler login --source x` mints the bearer token
+        | Cap.PARALLEL_TARGETS
+        | Cap.BILLED)
+
+# Deliberately NOT set on x.rest, and each absence is a spending decision:
+#   Cap.MUTABLE_METRICS -- re-observation costs $0.005/post/refresh (§3.8)
+#   Cap.COMMENT_TREE    -- replies are a per-post opt-in with a hard bound, not a capability
+#   Cap.DELETE_EVENTS   -- nothing reports deletions; but see §3.8, the sweep cannot help either
 ```
 
 `Cap.BILLED` is the flag that earns its place by making core do something: check `usage_counters` **before** the run starts and refuse to begin if the month's cap is spent. If nothing in core branched on it, it would be documentation and would belong in the README.
@@ -441,6 +458,8 @@ Caching the numeric user id in `containers.extra` is not an optimisation, it is 
 
 ## 8. Verify before building
 
+**The consolidated list is [../../PLAN.md](../../PLAN.md) §12**; this is the X subset with its per-item consequence.
+
 | # | Claim | Confidence | How to settle it | Blocks |
 |---|---|---|---|---|
 | 1 | **The export ZIP's internal layout** — file names, directory structure, the JS-assignment wrapper | `[unverified]` | **request one archive, `unzip -l` it, read `TheExGenesis/community-archive`'s parser.** ~24h turnaround. | **all of Phase 4a** — this is the biggest unknown in the half that actually ships |
@@ -452,7 +471,7 @@ Caching the numeric user id in `containers.extra` is not an optimisation, it is 
 | 7 | Whether DM Event reads need approval beyond pay-per-usage | `[unverified]` | **moot** — DMs come from the archive (§2.2) | nothing |
 | 8 | Current rate-limit values | `[verified]` as of 2026-09-01, but the doc carries no revision date | headers on the first live request | nothing — 4 orders of magnitude of headroom |
 | 9 | Current legal status of the Nitter C&D | `[unverified]` | as of 2026-09-01 nitter.net was offline and the maintainer was seeking counsel; no filed lawsuit reported | nothing — the rejection in §1 stands either way |
-| 10 | **Every price figure, before flipping the switch** | `[verified]` from docs 2026-09-01 | `console.x.com` is the only authority on what you are billed | **`enabled: true`** |
+| 10 | **Reconcile the prices against the billing authority before flipping the switch** | the *published figures* are `[verified]` — two independent recon passes fetched `docs.x.com` on 2026-09-01 and agree on all of them. What is **not** verified is that the console charges what the docs say | `console.x.com`. The dry run prints the price it read there next to its projection, so the first real run reconciles the assumption against the ledger | **`enabled: true`** |
 
 ---
 
@@ -471,4 +490,4 @@ Caching the numeric user id in `containers.extra` is not an optimisation, it is 
 
 ---
 
-*See also: [./reddit.md](./reddit.md) — the other REST connector, and the instructive contrast: Reddit's governor is a **quota** corrected by response headers; X's is a **spend counter** checked before the run starts. Same `TokenBucket`, same `Budget`, different fields filled. · [../DATA-MODEL.md](../DATA-MODEL.md) · [../ARCHITECTURE.md](../ARCHITECTURE.md) · [../GOVERNANCE.md](../GOVERNANCE.md) for the conversation-class handling the archive importer inherits.*
+*See also: [./reddit.md](./reddit.md) — the other REST connector, and the instructive contrast: Reddit's governor is a **quota** corrected by response headers; X's is a **spend counter** checked before the run starts. Same `TokenBucket`, same `Budget`, different fields filled. · [../DATA-MODEL.md](../DATA-MODEL.md) · [../../ARCHITECTURE.md](../../ARCHITECTURE.md) · [../GOVERNANCE.md](../GOVERNANCE.md) for the conversation-class handling the archive importer inherits.*

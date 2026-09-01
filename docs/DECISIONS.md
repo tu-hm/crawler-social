@@ -7,13 +7,14 @@ what would have to change for a decision to be worth reopening.
 
 Each entry is deliberately one screen. Where a decision rests on a fact that is not
 verified, the fact carries its confidence label here and appears in
-[../ARCHITECTURE.md](../ARCHITECTURE.md) §15 *Verify before building*.
+[../PLAN.md](../PLAN.md) §12 *Verify before building*, which is the consolidated list.
 
 Read alongside: [../ARCHITECTURE.md](../ARCHITECTURE.md) (what the system *is*),
 [./DATA-MODEL.md](./DATA-MODEL.md) (the schema), [./GOVERNANCE.md](./GOVERNANCE.md)
 (privacy classes and retention), [./sources/](./sources/) (per-connector evidence),
-[../PLAN.md](../PLAN.md) (scope and the numbered milestones),
-[../ROADMAP.md](../ROADMAP.md) (phase order and deferred-item triggers).
+[../PLAN.md](../PLAN.md) (scope, the numbered milestones, the deferred list with its
+triggers, the verify checklist and the open questions),
+[../README.md](../README.md) (what this repo is and the reading order).
 
 ---
 
@@ -31,7 +32,7 @@ Read alongside: [../ARCHITECTURE.md](../ARCHITECTURE.md) (what the system *is*),
 | [0007](#adr-0007) | Cursors are rebuildable from stored envelopes | `cursors --rebuild` turns an argument into a recovery path. |
 | [0008](#adr-0008) | Durable and ephemeral cursors are different storage locations | A page token never enters `cursors`. |
 | [0009](#adr-0009) | Coverage claims are persisted and drive a core-owned `gaps` table | Four silent-data-loss bugs become one table. |
-| [0010](#adr-0010) | SUSPECT is two rules, not one | Each is blind exactly where the other fires. |
+| [0010](#adr-0010) | SUSPECT is three rules, not one | Each is blind exactly where the others fire. |
 | **B. Data model** | | |
 | [0011](#adr-0011) | One `items` table, hybrid leaning polymorphic | FTS5 and bm25 decide this, not taste. |
 | [0012](#adr-0012) | The escape hatch is a generated column, not a detail table | One `ALTER TABLE` line, verified. |
@@ -46,10 +47,10 @@ Read alongside: [../ARCHITECTURE.md](../ARCHITECTURE.md) (what the system *is*),
 | [0021](#adr-0021) | Telegram entities are stored raw, never flattened | Flattening is a lossy parse you cannot undo. |
 | **C. Privacy and governance** | | |
 | [0022](#adr-0022) | Three privacy classes, two physical files | The boundary is a file path, not a `WHERE` clause. |
-| [0023](#adr-0023) | Privacy is a property of the container, resolved by core | Config may raise, never lower. Unclassifiable → conversation. |
-| [0024](#adr-0024) | Identical DDL both files; one envelope → one target → one container | Routing is total; `rm private.db` is complete. |
+| [0023](#adr-0023) | Privacy is a property of the container, resolved by core; identity linking stays out of the schema | Config may raise, never lower. Unclassifiable → conversation. |
+| [0024](#adr-0024) | Identical DDL both files, with one declared FTS5 fork | Routing is total; `rm private.db` is complete. |
 | [0025](#adr-0025) | FileVault checked, SQLCipher for `private.db` only | Backup exfiltration is the real threat, not theft. |
-| [0026](#adr-0026) | Pseudonymize at export; join on `actor_hmac` | Names are in the message text anyway. |
+| [0026](#adr-0026) | Pseudonymize at export; join on `actor_hmac`; no `identity_mode` column | Names are in the message text anyway. |
 | [0027](#adr-0027) | There is no `phone` column anywhere | Structural, not a policy note. |
 | [0028](#adr-0028) | Redaction must not undo itself | `block_reingest = 1`, consulted on every insert. |
 | [0029](#adr-0029) | Purge tells the truth about SQLite and APFS | `secure_delete` at creation, then say what remains. |
@@ -59,8 +60,8 @@ Read alongside: [../ARCHITECTURE.md](../ARCHITECTURE.md) (what the system *is*),
 | [0033](#adr-0033) | Export is default-deny; `--include-private` refused off-TTY | A scheduled job can never emit conversation data. |
 | [0034](#adr-0034) | Media is a snapshot-at-ingest side-car with weaker guarantees | The only unbounded cost in the project. |
 | **D. Operations** | | |
-| [0035](#adr-0035) | Two LaunchAgents, exactly one SQLite writer, no supervisor | launchd already is one. |
-| [0036](#adr-0036) | Push transports never open SQLite; the spool, quota and TTL | Four transport shapes collapse into two lanes. |
+| [0035](#adr-0035) | One LaunchAgent, exactly one SQLite writer, no supervisor | launchd already is one. |
+| [0036](#adr-0036) | If a push transport ever ships: it never opens SQLite — **NOT BUILT at v1** | Right argument, zero producers. `Cap.FILE_IMPORT` is the half that ships. |
 | [0037](#adr-0037) | One `TokenBucket` behind one `Budget`; `mode:` is a comment | If code branches on `mode`, the abstraction failed. |
 | [0038](#adr-0038) | X's monthly allowance is money → `usage_counters` | A bucket smooths a rate; a counter enforces a budget. |
 | [0039](#adr-0039) | X runs at 01:00 UTC | The billing model picks the cron time. |
@@ -72,12 +73,12 @@ Read alongside: [../ARCHITECTURE.md](../ARCHITECTURE.md) (what the system *is*),
 | [0045](#adr-0045) | Plugin discovery is a hardcoded dict of lazy import strings | It is what keeps `reparse` selenium-free. |
 | [0046](#adr-0046) | One `uv` project, per-connector dependency groups | Five lockfiles is isolation nobody needs yet. |
 | [0047](#adr-0047) | A capability exists only if core branches on it | Plus `capabilities_note()` for what no enum can say. |
-| [0048](#adr-0048) | Provenance is two integers plus a bounded N:M | Metric refreshes never write provenance rows. |
+| [0048](#adr-0048) | Provenance is two integers plus a bounded N:M keyed on `role` | Metric refreshes never write provenance rows — a schema property, not a convention. |
 | [0049](#adr-0049) | `FixtureConnector` + `tick --fixture` + golden snapshots | The whole pipeline, offline. |
 | [0050](#adr-0050) | `codec` column from day one; zlib at v1, zstd at connector two | Schema frozen now so the switch is a flag flip. |
 | [0051](#adr-0051) | FTS5: one unconditional-trigger index per file | The file split makes a corruption class unrepresentable. |
 | [0052](#adr-0052) | Python 3.13 and a SQLite ≥ 3.45 assertion | `uv` bundles its own SQLite. |
-| [0053](#adr-0053) | Two SQLite one-shot decisions: `local_day` STORED, canonical query text | Neither can be retrofitted. |
+| [0053](#adr-0053) | Two SQLite one-shot decisions: `local_day` STORED, canonical query text | Neither can be retrofitted — and the engine only enforces the first once rows exist. |
 | **E. Sources** | | |
 | [0054](#adr-0054) | Reddit: `prawcore` + `httpx`, never PRAW in the ingest path | PRAW discards the bytes. |
 | [0055](#adr-0055) | Reddit ships one backend at v1; the degraded path is specified, unbuilt | No three-way abstraction for a maybe. |
@@ -87,7 +88,7 @@ Read alongside: [../ARCHITECTURE.md](../ARCHITECTURE.md) (what the system *is*),
 | [0059](#adr-0059) | Telegram read-only is enforced by absence, not a flag | A toggle is a thing that can be set to true. |
 | [0060](#adr-0060) | Zalo is deferred with its slot specified; Selenium rejected outright | The proof that transport is a per-connector decision. |
 | [0061](#adr-0061) | Delivery order: Facebook → Telegram → Reddit → X | Test the design at connector two, not connector four. |
-| [0062](#adr-0062) | PLAN.md M3 is demoted to a parse-quality gate | Choosing wrong at a project gate costs everything before it. |
+| [0062](#adr-0062) | The Facebook extraction spike is a parse-quality gate, not a project gate | Choosing wrong at a project gate costs everything before it. |
 | [0063](#adr-0063) | Legal baseline: Law 91/2025 + Decree 356/2025, no exemption assumed | Decree 13/2023 was repealed on 2026-01-01. |
 
 ---
@@ -164,7 +165,7 @@ raw-first costs nothing extra. **Litmus test, run at every review:** delete
 sharing is inheritance or import.
 
 **Decision.** `typing.Protocol`, duck-typed. Shared **helpers** a connector may import
-(`core.http`, `core.pace.Bucket`, `core.spool`, `core.log`, `core.codec`).
+(`core.http`, `core.pace.Bucket`, `core.log`, `core.codec`).
 
 **Rejected.** A `BaseConnector` — it would impose an HTTP-shaped lifecycle (open
 session → request → close) on the browser connector, which has a completely different
@@ -174,7 +175,7 @@ where they do not fit; an inherited lifecycle cannot.
 **Consequences.** `FixtureConnector` satisfies the same Protocol with no inheritance
 tax (ADR-0049). A connector's third-party client library (selenium, telethon,
 prawcore) lives inside its directory and **never leaks a type into core** — the
-generalization of PLAN.md §2's `stealth.py`-isolation argument.
+generalization of the original plan's `stealth.py`-isolation argument (PLAN.md §5.5).
 
 ---
 
@@ -313,31 +314,45 @@ auditable after the fact.
 ---
 
 <a id="adr-0010"></a>
-### ADR-0010 — SUSPECT is two rules, not one
+### ADR-0010 — SUSPECT is three rules, not one
 
 **Context.** The worst failure mode in this class of tool is the one that *looks like
 success*: the run returns 0 items, "succeeds", the cursor advances, and every future
-run skips real content forever. PLAN.md §7 identifies it for Facebook
+run skips real content forever. PLAN.md §6 M7 identifies it for Facebook
 (empty-feed-with-HTTP-200); it recurs on every source.
 
-**Decision.** Two independent detectors, both owned by core:
+**Decision.** Three independent detectors, all owned by core:
 
 - **(a)** an envelope claimed `COVER_EXACT` over a non-empty interval and
   `ParseResult.found == 0`.
 - **(b)** zero items from a target that produced items in **each** of its last three
   runs.
+- **(c)** a run whose `runs.stop_reason` is a watermark stop at **scroll ≤ 2** with
+  `items_new == 0`.
 
-Either rolls back the cursor write and sets `runs.status='suspect'`. Two consecutive
-escalate to `HUMAN`.
+Any of the three rolls back the cursor write and sets `runs.status='suspect'`. Two
+consecutive escalate to `HUMAN`.
 
 **Rejected.** Rule (b) alone (the obvious design) — it is blind on a brand-new target
 and for three runs after a reparse resets the ledger. Rule (a) alone — it can never
 fire for a connector that honestly claims `COVER_OPAQUE`, which Facebook always will.
+**Rules (a) and (b) together, which is where this ADR originally stopped** — see below.
 
 **Consequences.** Rule (a) fires on run **one**, catching Facebook's empty feed, a
 Reddit auth-error page rendered with HTTP 200, and Telegram's silently-empty history
-after removal from a group. Rule (b) catches what (a) structurally cannot see. Both
-exist because each is blind exactly where the other fires.
+after removal from a group. Rule (b) catches what (a) structurally cannot see.
+
+**Rule (c) was added because (b) disqualifies itself on the failure it is most needed
+for.** If Facebook's pinned-badge selector rotates, the watermark stop rule trips on scroll
+one, every run thereafter returns **zero new items** — and after three such runs (b) has no
+"produced items in each of its last three runs" history left to test against. It goes blind
+by its own definition, silently, on the exact failure mode the design fears most. Rule (c)
+needs no history and no fill rate: a feed claiming it reached familiar ground before it has
+scrolled twice, while adding nothing, is not a quiet day. It costs the connector one honest
+`stop_reason` and `scroll` value in the last envelope's `meta`; the rule itself lives in
+core and applies to any connector with a behavioural stop rule.
+
+All three exist because each is blind exactly where the others fire.
 
 ---
 
@@ -492,7 +507,7 @@ encoding later would require rewriting every path, so it is frozen now.
 <a id="adr-0017"></a>
 ### ADR-0017 — `envelopes` is split from `envelope_fetches`
 
-**Context.** PLAN.md §4's `raw_payloads` carries both `sha256 UNIQUE` and
+**Context.** The original plan's `raw_payloads` (PLAN.md §5.5) carries both `sha256 UNIQUE` and
 `captured_at`.
 
 **Decision.** `envelopes` — one row per **distinct byte sequence**, `sha256` UNIQUE.
@@ -646,6 +661,20 @@ Defence in depth, one line of code. `containers` carries
 `CHECK (privacy <> 'conversation' OR viewer_account_id IS NOT NULL)`: *"by what right
 do I hold this?"* as a NOT NULL constraint.
 
+**Standing rule this ADR now also owns: cross-platform identity linking is out of the
+schema, and adding it requires a schema migration *and* an ADR.** That pairing is the
+review checkpoint. An earlier draft bought it with two empty tables — `persons` and
+`author_person_links`, the latter carrying `CHECK (linked_by IN ('manual','self'))` with
+deliberately no `'inferred'` value. The reasoning was right; the mechanism was two tables,
+a composite foreign key and a `CHECK` with **zero declared writers**, which is a lot of DDL
+for a tripwire a sentence buys outright. Both tables are gone from the frozen DDL and this
+rule replaces them. The reason is correctness rather than caution: Vietnamese given-name
+distributions are concentrated enough that name-based cross-platform matching is near a coin
+flip, and a wrong link silently poisons every query that reads it with no way to tell which
+rows are affected. `authors.actor_hmac` stays the per-source join key and is sufficient for
+everything the tool does, `purge --person` included. The deferred row and its trigger — *you
+actually want to link two accounts, by hand* — are in [../PLAN.md](../PLAN.md) §11.
+
 ---
 
 <a id="adr-0024"></a>
@@ -676,6 +705,17 @@ forgets, and getting it wrong (raw TL slices in the plain file) defeats the enti
 separation, because raw-first means the payload contains everything the parsed rows
 contain and more.
 
+**One fork, declared rather than assumed.** "Identical DDL" rests on an unverified fact:
+whether the vendored SQLCipher build in `sqlcipher3` 0.6.2 has **FTS5** compiled in
+(PLAN.md §12 B1). If it does not, `CREATE VIRTUAL TABLE items_fts` fails and the statement
+list cannot be applied to `private.db` at all — which would break this invariant rather than
+merely inconvenience it. So the fork is written down: same statement list **minus the five
+FTS objects**, the divergence recorded in `schema_versions` as a declared state, `doctor`
+reporting it as declared rather than as an error, and `crawler search --private` degrading to
+a `LIKE` scan over `items.text` (milliseconds at personal DM volume). Conversations stay
+searchable on both branches, which is the flaw this ADR rejected. The check is the **first**
+thing M0 does. See [./DATA-MODEL.md](./DATA-MODEL.md) §14 item 1.
+
 ---
 
 <a id="adr-0025"></a>
@@ -694,7 +734,7 @@ enrol a conversation target if FileVault is off. On top of that, SQLCipher via
 - *`sqlcipher3-binary`* — verified Linux-only wheels (`manylinux2014_x86_64`) on
   SQLCipher 3.x. Wrong platform.
 - *SQLCipher for `social.db` too* — taxes the ~90% of rows that are public broadcast,
-  breaks `sqlite3 data/social.db ".schema"` and every ad-hoc query in PLAN.md §8, and
+  breaks `sqlite3 data/social.db ".schema"` and every ad-hoc query in PLAN.md §9, and
   complicates the daily `.backup`, in exchange for protection against a threat
   FileVault already covers. Trigger to revisit: `social.db` needs to leave the machine.
 - *Application-layer AES-GCM on the body column only* — same dependency cost, and it
@@ -722,10 +762,12 @@ compiled in — `SELECT * FROM pragma_compile_options()` at M0.
 **Context.** The governance recon recommended `identity_mode: pseudonymous` as the
 storage default for conversations.
 
-**Decision.** Overridden deliberately. `identity_mode` defaults to **`clear`** in both
-files. `authors` joins on `actor_hmac` = HMAC-SHA256(source‖platform_uid, pepper),
-**always present**, with `actor_key` / `display_name` / `handle` **nullable**.
-Pseudonymization happens at **export** (ADR-0033).
+**Decision.** Overridden deliberately. Identity is stored **`clear`** in both files, and
+there is **no `identity_mode` column at all** (see the last paragraph below). `authors`
+joins on `actor_hmac` = HMAC-SHA256(source‖platform_uid, pepper), **always present**, with
+`platform_uid` / `display_name` / `handle` / `profile_url` **nullable**. Masking happens at
+**export**, in `v_items_masked`, keyed off `containers.privacy` and `items.is_from_self`
+(ADR-0033).
 
 **Rejected.** Pseudonymous storage — for two reasons. A private DM archive full of
 `P-7f3a` labels is **useless to its owner**, which is the entire point of the tool.
@@ -741,6 +783,14 @@ honestly as pseudonymization, not anonymization:** platform ids are a low-entrop
 enumerable space, and anyone holding both the DB and the pepper can rebuild the
 mapping.
 
+**And there is no per-target `identity_mode` column.** An earlier draft kept one, defaulting
+to `clear`, "available for a conversation the user wants extra-hardened". Nothing anywhere
+read it — `v_items_masked` keys its masking off `containers.privacy = 'conversation' AND
+items.is_from_self = 0`, and export masking is gated on `--include-names`. A governance column
+with a plausible name and no reader is worse than no column, because it reads like a control
+that is running. If per-target masking is ever wanted it comes back as a nullable column and
+a code path that reads it, in the same commit.
+
 ---
 
 <a id="adr-0027"></a>
@@ -750,9 +800,16 @@ mapping.
 all appear in payloads.
 
 **Decision.** No `phone` column exists anywhere. `scrub()` drops
-`phone | email | latitude | longitude | access_hash | file_reference | online | status
-| read_outbox_max_id` **before persistence**, with `assert_clean()` re-checking on every
-non-broadcast write.
+`phone | email | latitude | longitude | geo | gps | venue | location | access_hash |
+file_reference | online | status | read_outbox_max_id` **before persistence**, with
+`assert_clean()` re-checking on every non-broadcast write.
+
+**The same argument removed `'location'` from the `media.kind` CHECK.** The frozen enum
+reserved a media kind for exactly the data class `scrub()` is required to drop and
+`assert_clean()` raises `PIILeak` over — and location is *sensitive*-category data under
+Vietnam's PDPL, so it is the last place to leave a hole. `MediaDraft.kind` never listed it
+either, so the contract and the DDL disagreed. Both now read
+`image|video|audio|voice|file|sticker|link_card|poll`.
 
 **Rejected.** A retention policy or a code-review convention — both are documentation
 properties, and this is a data-flow property.
@@ -802,7 +859,7 @@ itself — that is a system-wide destructive act and the user's call.
 **Consequences.**
 
 ```
-purged 4,102 items and 118 envelopes (conversation, >180d)
+purged 4,102 items and 118 envelopes (conversation, >365d)
 vacuumed: private.db 512MB -> 361MB
 note: APFS local snapshots may still contain the pre-purge file.
       `tmutil listlocalsnapshots /` to inspect. Not doing this for you.
@@ -943,25 +1000,36 @@ allowlist and `max_bytes` set at the same time.
 ## D. Operations
 
 <a id="adr-0035"></a>
-### ADR-0035 — Two LaunchAgents, exactly one SQLite writer, no home-grown supervisor
+### ADR-0035 — One LaunchAgent, exactly one SQLite writer, no home-grown supervisor
 
 **Context.** Facebook needs an Aqua session and must end by quitting the driver. A
 Telegram listener would want a persistent connection. Reddit and X finish in seconds.
 Three lifetimes.
 
-**Decision.** Two LaunchAgents. `…crawlersocial.tick` =
+**Decision.** **One** LaunchAgent. `…crawlersocial.tick` =
 `StartCalendarInterval` 08:05 + 20:35, `LimitLoadToSessionType=Aqua`,
 `ProcessType=Interactive`, wrapped in `caffeinate -i`, **deliberately no `KeepAlive`**.
-`…crawlersocial.receivers` = `RunAtLoad` + `KeepAlive{SuccessfulExit=false,
-NetworkState=true}`, `ThrottleInterval=60` — and it is **empty at v1**. An optional
-third `StartInterval=900` batch-lane agent later.
+An optional second `StartInterval=900` batch-lane agent is deferred with a trigger.
+
+**Amended 2026-09-01.** This ADR originally specified a second always-on agent,
+`…crawlersocial.receivers` (`RunAtLoad` + `KeepAlive{SuccessfulExit=false}`,
+`ThrottleInterval=60`), installed **empty at v1** so its restart semantics would be proven
+against a real launchd before anything depended on them. It is **cut**, for three reasons
+that compound: it had **zero producers** (every push transport is deferred or impossible —
+ADR-0036); nothing tested it, because the milestone that installed it verified the *tick*
+agent's calendar firing and lid-close coalescing, so the stated benefit was never obtained;
+and an always-on process with no job is a failure surface with no benefit. `Cap.PUSH`,
+`core/spool.py`, `core/receivers.py`, the `Receiver` Protocol, `run-receivers.sh` and the
+spool quota/TTL `doctor` checks go with it.
 
 **Rejected.** A supervisor daemon — launchd already is one, and a second supervisor is
 a second thing that can be down. Five plists — four would be identical API-lane
 invocations. `cron` — no GUI session, so headful Chrome cannot run. `KeepAlive` on the
 tick agent — a batch job that exits nonzero must **stay** exited, not respawn straight
 back into a Facebook block. `pmset repeat wake` — waking the Mac at 03:00 to scroll
-Facebook is the opposite of the pacing story.
+Facebook is the opposite of the pacing story. And, as of the amendment above, **installing
+an agent "empty so its semantics are proven"** — the semantics were not proven by anything,
+and the honest version of that argument is "we will find out when we need it."
 
 **Consequences (all verified locally against `man 5 launchd.plist`, macOS 26.5.2).**
 launchd **defers a missed `StartCalendarInterval` until wake and coalesces multiple
@@ -971,18 +1039,24 @@ cursor and never by "fetch yesterday"**. `KeepAlive.SuccessfulExit=false` is how
 error taxonomy reaches launchd: a crash exits nonzero and restarts; a `HUMAN` or `STOP`
 verdict alerts and exits **zero**, and stays down until `crawler resume`.
 
-**One correction, verified locally:** the man page documents
+**One launchd fact kept for the day it matters, verified locally:** the man page documents
 `KeepAlive.NetworkState` as *"no longer implemented as it never acted how most users
-expected."* The key is kept because it is inert, not because it works — do not rely on
-it to stop an offline restart loop; `ThrottleInterval` plus exiting **0** when the
-network is unreachable is the working control. Also note the man page's own wording:
-*"If multiple keys are provided, launchd **ORs** them"* — a `KeepAlive` dictionary is
-not a conjunction.
+expected."* Moot at v1 now that no agent sets `KeepAlive` at all — but if a push-transport
+agent is ever written, do not reach for that key to stop an offline restart loop;
+`ThrottleInterval` plus exiting **0** when the network is unreachable is the working control.
+Also note the man page's own wording: *"If multiple keys are provided, launchd **ORs** them"*
+— a `KeepAlive` dictionary is not a conjunction.
 
 ---
 
 <a id="adr-0036"></a>
-### ADR-0036 — Push transports never open SQLite; the spool, its quota and its TTL
+### ADR-0036 — If a push transport ever ships: it never opens SQLite — **NOT BUILT at v1**
+
+> **Status: specified, not built, and nothing in the codebase references it.** No producer
+> exists. Telegram listen mode is itself deferred with its own trigger (ADR-0058), and all
+> three Zalo transports are deferred or impossible (ADR-0060). This entry is kept because
+> the *argument* is right and worth not re-deriving; the trigger that unblocks it is
+> "the first real push producer exists", in [../PLAN.md](../PLAN.md) §11.
 
 **Context.** A persistent Telegram listener, an inbound Zalo webhook and a polled HTTP
 endpoint look like three different scheduler lanes. Plus a fourth for file import.
@@ -997,16 +1071,22 @@ and would need a second flock scope for `AUTH_KEY_DUPLICATED`. Leaving the spool
 unbounded — its own author admitted it needed a bound.
 
 **Consequences.** Persistent-stream, inbound-webhook and polled-HTTP collapse into
-**one** shape, so the scheduler sees **two lanes, not four**. Crash-replay works by
-atomic rename into `consumed/`. The spool and the archive importer are **the same
-shape** — `fetch()` over a local directory — so the X data-archive ZIP importer needs
-no new transport concept, just `Cap.FILE_IMPORT` and a path. This single graft deletes
-the entire daemon lane, its supervisor and its exit-code subtleties from v1.
+**one** shape, so the scheduler would see **two lanes, not four**. Crash-replay works by
+atomic rename into `consumed/`.
 
-The quota is not bookkeeping: **a spool holds unencrypted third-party message bytes
-outside `private.db` and outside its retention sweep.** That is exactly the category of
-data the governance design works hardest to bound, sitting in the one place a naive
-design forgets to bound it.
+**And this is where the collapse argument eats itself, which is why nothing is built.** The
+spool and the archive importer are the same shape — `fetch()` over a local path — so the X
+data-archive ZIP importer needs **only `Cap.FILE_IMPORT` and a path**: no daemon, no quota,
+no TTL, no second agent, no enum flag. `Cap.FILE_IMPORT` is the half with a real user at
+v1 (M14). The rest is the half with none. So v1 ships `Cap.FILE_IMPORT` and ships nothing
+else from this entry.
+
+**A precondition on ever building it, carried here so it is not rediscovered later.** The
+quota and TTL are not bookkeeping: **a spool holds unencrypted third-party message bytes
+outside `private.db` and outside its retention sweep.** That is exactly the category of data
+the governance design works hardest to bound, sitting in the one place a naive design forgets
+to bound it. If a push transport ever ships, the 256 MB quota and 72-hour TTL ship in the
+same commit, enforced by `doctor` — not as a follow-up.
 
 ---
 
@@ -1029,7 +1109,7 @@ quota settings drift apart. Two code paths keyed on `mode` — **if anyone ever 
 `max_items` (`--limit N`), `deadline_ts` (Facebook's 25-minute session cap),
 `spend_units` (X's per-run billable ceiling), `max_requests`, and the bucket. ~20
 lines, and it is the one piece of pacing that genuinely **is** shared, unlike the
-bucket constants themselves. PLAN.md §7's pacing table becomes the `facebook` entry
+bucket constants themselves. PLAN.md §8's pacing table becomes the `facebook` entry
 with the numbers **unchanged**. Facebook publishes no rate headers, which is exactly
 why its numbers must start conservative: the failure signal is a checkpoint, not a 429.
 
@@ -1056,8 +1136,23 @@ Defaults are all spending decisions: `exclude=retweets`, replies **off** (thread
 reconstruction bills every reply, so one viral post with 2,000 replies is real money
 and the cost scales with *other people's* engagement), backfill capped at 200
 posts/account, and `--limit N` bounds **posts fetched** because that is the billable
-unit. **Every price figure is unverified and must be confirmed at console.x.com
-before the connector is enabled** — see [../ARCHITECTURE.md](../ARCHITECTURE.md) §15 V8.
+unit.
+
+**On price, corrected.** This entry previously said "every price figure is unverified".
+That is no longer true: two independent recon passes fetched
+`docs.x.com/x-api/getting-started/pricing` on 2026-09-01 and agree on every figure, so the
+published prices are `[verified]` (PLAN.md §12 C14). What survives is a different and
+sharper obligation — **`console.x.com` is the billing authority and docs lag** — so the
+`spend_cap` is typed as a **dollar ceiling** the user enters at enable time rather than
+derived from a price this plan believes, and the dry run prints the price it read from the
+console next to its projection.
+
+**One metric, not two.** `usage_counters.metric` is `CHECK`-constrained to `'cost_micros'`
+(DATA-MODEL §3). An earlier draft allowed `'reads'` as well, and two frozen configs promptly
+disagreed about which one the cap used — a governor reading a metric the ingest path does not
+write sees a month-to-date of **zero** and never fires. `cost_micros` is the survivor because
+it survives a repricing; `reads` does not. A test asserts the governor reads the metric the
+ingest path writes.
 
 ---
 
@@ -1136,7 +1231,7 @@ the source stays down until a human acts.
 **Decision.** Where a server supplies a duration, obey it **exactly**. Telegram's
 `FloodWaitError.seconds` is authoritative; if it exceeds **300s** the cursor is
 checkpointed and the run exits **75** for the next tick to resume. Facebook supplies
-nothing, so it gets policy backoff **15m → 1h → 4h → stop**, per PLAN.md §7 unchanged.
+nothing, so it gets policy backoff **15m → 1h → 4h → stop**, per PLAN.md §8 unchanged.
 
 **Rejected.** A single house backoff curve applied to everyone — it would either ignore
 Telegram's authoritative number (and teach Telegram's heuristics that this account
@@ -1253,6 +1348,24 @@ exact branch point. `capabilities_note()` is grafted from thin-core because
 `getGroupChatHistory`; no 1:1 DM history method exists"* is exactly what they need to
 know about Zalo.
 
+**Two corollaries added after the flags and the source docs disagreed in five places.**
+
+1. **The `caps = (...)` block in each source doc is the source of truth**, because it is the
+   thing that ships as code. ARCHITECTURE §6's per-connector matrix is *derived* from those
+   blocks and says so; on any conflict the source doc wins and the matrix is the bug. This is
+   not pedantry — the flags in that matrix are ones core *branches on*, so a wrong cell meant
+   scheduling a comment-expansion phase for a connector with no such code, or billing the
+   user for a metric refresh the connector exists to avoid.
+2. **`Cap.PUSH` is deleted, not deferred-in-place.** The rule reads "a capability may exist
+   only if core branches on it"; the honest extension is *and only if something can set it*.
+   `PUSH` had no producer at v1 (ADR-0036) and gated a `Receiver`, a spool, a quota, a TTL,
+   two `doctor` checks and a second LaunchAgent. It returns with the first push transport.
+   `Cap.FILE_IMPORT`, which has a real user at M14, stays.
+
+A third rule the same review produced: **`BACKFILL_CAPPED` implies `BACKFILL` for CLI
+argument validation.** Otherwise Reddit — which correctly sets only the capped flag — has
+`--since` rejected at argument parsing while its own document documents `--since` as working.
+
 ---
 
 <a id="adr-0048"></a>
@@ -1266,12 +1379,26 @@ for the cheap `crawler explain <item>`. `item_envelopes` records **only
 `role='primary'`** writes — the envelopes that produced or *updated content* — never
 metric batches.
 
-**Rejected.** Full N:M provenance on every write — 3,000 tracked items re-observed
-daily is over a million rows a year whose entire information content is "still 220".
+**`role` is a real column, and it has to be.** An earlier draft of this ADR asserted
+`role='primary'` while the frozen `CREATE TABLE item_envelopes` had no such column: five
+places across four documents wrote or filtered on a value the schema could not hold. That
+made the boundedness guarantee an unwritten convention in the writer — nothing enforced it,
+nothing could audit it afterwards, and nothing distinguished a content envelope from a metric
+envelope in the table. It is now
+`role TEXT NOT NULL DEFAULT 'primary' CHECK (role IN ('primary'))`, in the primary key. The
+single-valued `CHECK` is the point: **adding a second role is a migration**, which is exactly
+the review checkpoint this decision wants.
+
+**Rejected.** Full N:M provenance on every write — one row per (item, metric refresh),
+forever, whose entire information content is "still 220". *(The magnitude claim that used to
+sit here — "over a million rows a year" — was carried into three other documents as a claim
+about **envelope** rows, where it was wrong by about a hundredfold. It is correct only about
+this rejected design, and DATA-MODEL §6 now does the arithmetic properly.)*
 No N:M at all — two integers cannot express an item assembled from a feed snapshot plus
 a post page.
 
-**Consequences.** Full content provenance survives; metric churn does not inflate it.
+**Consequences.** Full content provenance survives; metric churn does not inflate it; and
+the bound is a schema property rather than a promise.
 
 ---
 
@@ -1388,8 +1515,13 @@ its CI commit, on the actual project interpreter.
 2. The canonical timeline query text lives in a **named module constant** and is never
    retyped. `ANALYZE` runs after the first substantial crawl and in the daily job.
 
-**Rejected.** Adding `local_day` later — **verified:** `ALTER TABLE ... ADD COLUMN ...
-STORED` fails with `cannot add a STORED column`; only `VIRTUAL` can be added later.
+**Rejected.** Adding `local_day` later. The restriction is documented
+(`sqlite.org/gencol.html`) and re-executed here, **but the engine is not the guard**: on
+3.51.0 `ALTER TABLE … ADD COLUMN … STORED` **succeeds on an empty table** and fails with
+`cannot add a STORED column` only once the table has rows. So a migration tested against an
+empty dev database passes and then fails on your real one, which is the worst possible place
+to find out. Put it in the initial DDL because it costs nothing there and is portable across
+engines that *do* enforce the rule — not because SQLite will stop you.
 Letting the timeline query be retyped at each call site — **partial indexes apply only
 when the query repeats their predicate verbatim.** Drop `AND visibility='visible'` and
 the planner silently falls back to a different index and **returns deleted rows**; at
@@ -1507,8 +1639,8 @@ that could be pointed anywhere. Skipping the importer as "not automatable" — i
 few times a year, which is exactly what the one-time run mode is for.
 
 **Consequences.** It lands **perfectly** on raw-first — **the ZIP *is* the payload**.
-It also proves the `Cap.FILE_IMPORT` shape, which is the same shape the spool uses
-(ADR-0036) and which Facebook and Zalo will both want later. Note the governance trap:
+It also proves the `Cap.FILE_IMPORT` shape — the half of ADR-0036 that has a real user —
+which Facebook and Zalo will both want later. Note the governance trap:
 X reads like a broadcast source right up until the DM folder lands in the same store,
 so the archive importer gets the full conversation treatment — `private.db`,
 forward-only, export-gated.
@@ -1618,15 +1750,32 @@ not retrievable"* instead of looking complete.
 
 **Context.** The winning proposal put Reddit second. Overridden on the recon evidence.
 
-**Decision.** Phase 0 (day one, in parallel, costs one form): **R0**, the Reddit
-credential application; plus FileVault on, Keychain pepper and `private.db` key
-generated, SQLCipher FTS5 confirmed. Then **Facebook → Telegram → Reddit → X (archive
-first, REST second, behind `enabled: false`)**.
+**Decision.** Phase 0 fires **four** day-one external asks in parallel, because each has a
+multi-day latency nobody controls: **R0** the Reddit credential application, **T0** the
+Telegram `api_id`, **X0** the X data-archive request, **P0** the Facebook profile clock.
+Plus FileVault on, both Keychain items generated, and the FTS5-in-SQLCipher answer settled.
+Then **Facebook → Telegram → Reddit → X (archive first, REST second, behind
+`enabled: false`)**.
 
 **Rejected.** Reddit second — for four reasons in order of weight. **(1) Sequencing
 risk:** Reddit's credentials may simply not exist; building the contract's first real
 test on a source that may never authenticate is unacceptable, while Telegram's
-`api_id`/`api_hash` are **self-issued** with no review. **(2) It tests the architecture
+`api_id`/`api_hash` are **self-issued with no review queue**.
+
+> **Reason 1's counterpart premise is checked, not assumed — this is T0.** "Self-issued
+> with no gate" is overstated as usually written. `my.telegram.org`'s *Create application*
+> form is reported to return a bare `ERROR` with no diagnostic for a substantial number of
+> accounts (Telethon issue #4661, opened 2025-07-16, never resolved and now frozen because
+> the GitHub repo was archived 2026-02-21), and every reported workaround is folklore —
+> different browser, incognito, different network, wait days. The accurate statement is
+> **"no review queue, but the self-service form is known to fail opaquely for some
+> accounts."** Reddit's credential risk gets a free day-one spike for exactly this reason;
+> its counterpart premise deserved one too and now has it. **If T0 fails, Telegram is not
+> connector #2** — the slot goes to whichever of Reddit (if R0 came back approved) or the X
+> archive importer is available. That call is pre-made in PLAN §6 M0 rather than discovered
+> at M11.
+
+**(2) It tests the architecture
 where it was chosen:** Telegram is the exact case that eliminated thin-core — one
 connector, one session file, emitting broadcast channels **and** private conversations.
 Building it second proves `containers.shape`/`privacy`, the two-file routing, the
@@ -1639,28 +1788,39 @@ wrong — the architecture's central thesis made concrete. Building all five con
 before running any — the contract is a hypothesis until two genuinely different
 transports have used it.
 
-**Consequences.** Facebook ships against PLAN.md M2–M10 essentially unchanged; only the
+**Consequences.** Facebook ships against PLAN.md **M1–M10** (Phase 1); only the
 machinery Facebook needs gets built (envelopes, cursors, coverage — always `opaque` —
-budget, verdicts, the SUSPECT pair, the run ledger, the canary). X goes last because it
+budget, verdicts, the SUSPECT trio, the run ledger, the canary). X goes last because it
 is the only connector where a bug costs **money** rather than time, and because its
 pricing model is seven months old and has changed three times in three years.
 
 ---
 
 <a id="adr-0062"></a>
-### ADR-0062 — PLAN.md M3 is demoted from a project-wide go/no-go gate to a parse-quality gate
+### ADR-0062 — The Facebook extraction spike is a parse-quality gate, not a project gate
 
-**Context.** PLAN.md M3 is a timeboxed spike: can Selenium BiDi read GraphQL **response
-bodies**? Under PLAN.md as written, M3 gates M4–M10.
+**Context.** The original plan made the extraction spike — *can we read GraphQL **response
+bodies**?* — a project-wide go/no-go that every later milestone hung off. In the current
+plan the spike is a half-day timebox inside **M2**, the walking skeleton.
 
-**Decision.** Demoted. `crawler-fb` captures `fb.feed_html` viewport snapshots **from
-day one**. If BiDi response-body interception lands later, capture `fb.graphql.feed`
-**alongside** and have the parser prefer the richer kind, with the HTML history still
-replayable.
+**Decision.** Demoted. The Facebook connector captures `fb.feed_html` viewport snapshots
+**from day one, unconditionally, whatever the spike says**. If response-body capture works,
+capture `fb.graphql.feed` **alongside** it and have the parser prefer the richer kind, with
+the HTML history still replayable either way.
 
-**Rejected.** Keeping M3 as a project gate — choosing wrong there costs **every post
+**Rejected.** Keeping it as a project gate — choosing wrong there costs **every post
 collected before you notice**, and the choice is not reversible under the original
 design because you would have stored only one kind.
+
+**Two facts settled the spike's own shape before it runs.** Selenium's **BiDi network module
+documents no way to read a real server response body** — the method set is `addIntercept`,
+`removeIntercept`, `continueWithAuth`, `continueWithAuthNoCredentials`, `cancelAuth`,
+`failRequest`, and the `continueResponse` family *provides* a response rather than reading
+one *(verified from selenium.dev, 2026-09-01)*. **SeleniumBase CDP Mode does** —
+`add_handler(mycdp.network.ResponseReceived, …)` then
+`page.send(mycdp.network.get_response_body(request_id))` returning `(body, is_base64)`
+*(verified from the SeleniumBase repo's own `examples/cdp_mode/raw_xhr_sb.py`)*. So the
+candidate the original plan led with is out on documentation alone, in ten minutes.
 
 **Consequences.** Endorsed by Judge 1 as one of the top three grafts (from
 log-then-project). It is only possible because `Envelope.kind` is free-form and

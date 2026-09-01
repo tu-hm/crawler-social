@@ -108,8 +108,14 @@ sqlite> ALTER TABLE items ADD COLUMN lday2 TEXT
 Error: stepping, cannot add a STORED column
 ```
 
-Only `VIRTUAL` generated columns can be added later. That is why `local_day` must be in
-the initial DDL, and it is why the DDL is frozen now rather than grown.
+Read that error carefully, because the usual one-line summary of it is wrong. On 3.51.0
+`ALTER TABLE … ADD COLUMN … STORED` **succeeds on an empty table** and fails only once the
+table has rows — the message above came from a *populated* `items`. Both were re-executed
+for this document. So the restriction is real but **the engine only enforces it after the
+fact**: a migration tested against an empty dev database passes and then fails on your real
+one. That is why `local_day` must be in the initial DDL, why the DDL is frozen now rather
+than grown, and why "only `VIRTUAL` can be added later" is a rule you follow rather than a
+guard you lean on.
 
 A detail table would earn its place when one source adds **more than eight fields that are
 queried together on a hot path**. None of the five currently does.
@@ -137,13 +143,21 @@ Three properties fall out, and all three were verified by building both files:
 
 ```
 $ sqlite3 social.db < full.sql && sqlite3 private.db < full.sql
-$ sqlite3 social.db  "SELECT count(*) FROM sqlite_master;"   ->  80
-$ sqlite3 private.db "SELECT count(*) FROM sqlite_master;"   ->  80
+$ sqlite3 social.db  "SELECT count(*) FROM sqlite_master;"   ->  77
+$ sqlite3 private.db "SELECT count(*) FROM sqlite_master;"   ->  77
 $ rm private.db private.db-wal private.db-shm
 $ sqlite3 social.db "PRAGMA integrity_check; SELECT count(*) FROM items;"
 ok
 1
 ```
+
+**Caveat on that verification, stated because it is easy to misread.** Both files above
+were built with plain `sqlite3`. It therefore proves the DDL is self-consistent; it does
+**not** prove the DDL applies to a SQLCipher connection, because the `sqlcipher3` wheel
+vendors its own SQLite build and **whether that build has FTS5 compiled in is unverified**
+(§14 item 1). That is a gate with two written branches at M0, not a footnote — see §14.
+Re-run this count with `sqlcipher3` for `private.db` at M11 so the 77/77 claim means what
+it says.
 
 No foreign key crosses the file boundary — SQLite cannot enforce one under `ATTACH`
 anyway. A cross-boundary edge (a Telegram forward from another channel) degrades to an
@@ -295,25 +309,20 @@ CREATE INDEX idx_authors_uid    ON authors(source, platform_uid)
   -- serves: ingest-time lookup by clear id. Partial, so redacted rows drop out of the
   -- index entirely rather than sitting in it as NULLs.
 
--- EMPTY at v1. Present because the CHECK is the review checkpoint: there is deliberately
--- no 'inferred' value, so automated identity matching cannot be added without a schema
--- migration. Vietnamese given-name distributions are concentrated enough that name-based
--- cross-platform matching is near a coin flip, and a wrong link silently poisons every
--- query that touches persons, with no way to tell which rows are affected.
-CREATE TABLE persons (
-  id INTEGER PRIMARY KEY, label TEXT NOT NULL UNIQUE, note TEXT,
-  created_at INTEGER NOT NULL
-) STRICT;
-
-CREATE TABLE author_person_links (
-  author_id INTEGER NOT NULL REFERENCES authors(id) ON DELETE CASCADE,
-  person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
-  linked_by TEXT NOT NULL CHECK (linked_by IN ('manual','self')),
-  confidence REAL NOT NULL DEFAULT 1.0,
-  linked_at INTEGER NOT NULL,
-  PRIMARY KEY (author_id, person_id)
-) STRICT, WITHOUT ROWID;
 ```
+
+**There are no `persons` / `author_person_links` tables.** Cross-platform identity linking
+is out of the schema at v1. An earlier draft carried both, empty, with
+`CHECK (linked_by IN ('manual','self'))` as a tripwire: adding automated matching would
+have required a migration, and a migration is a review checkpoint. The tripwire is worth
+keeping; two tables, a composite foreign key and a `CHECK` with **zero declared writers**
+are not the cheapest way to buy it. The rule now lives in
+[./DECISIONS.md](./DECISIONS.md) ADR-0023 as a written standing decision, and the deferred
+row in [../PLAN.md](../PLAN.md) §11 carries the trigger. The underlying reason is unchanged
+and is a correctness reason rather than a cautious one: Vietnamese given-name distributions
+are concentrated enough that name-based cross-platform matching is near a coin flip, and a
+wrong link silently poisons every query that reads it with no way to tell which rows are
+affected.
 
 ### Containers and targets
 
@@ -372,8 +381,9 @@ CREATE TABLE targets (
   raw_mode       TEXT NOT NULL DEFAULT 'inherit',
   media_mode     TEXT NOT NULL DEFAULT 'inherit',
   media_max_bytes INTEGER,
-  identity_mode  TEXT NOT NULL DEFAULT 'clear'
-                   CHECK (identity_mode IN ('clear','pseudonymous')),
+  -- NOTE: there is deliberately no `identity_mode` column. ADR-0026 stores identity
+  -- `clear` in both files and pseudonymises at EXPORT; a per-target override would have
+  -- had no reader anywhere in the design.
   on_upstream_delete TEXT NOT NULL DEFAULT 'auto',
   include_replies INTEGER NOT NULL DEFAULT 1 CHECK (include_replies IN (0,1)),
   max_depth      INTEGER,
@@ -473,7 +483,13 @@ CREATE INDEX idx_gaps_open ON gaps(target_id) WHERE filled_at IS NULL;
 
 -- The M10 canary, generalised across connectors. A collapse in published_at fill rate is
 -- the early warning that Facebook rotated the DOM — and it works identically for a Reddit
--- JSON field disappearing.
+-- JSON field disappearing. Core writes these rows from `ParseResult.field_stats`
+-- (dict[str, tuple[int,int]] -> field -> (seen, filled)), NOT from `diagnostics`, which is
+-- free text and cannot carry a triple. See ARCHITECTURE.md §5.
+--
+-- `filled` is only well defined if a parser can distinguish "absent" from "false". That is
+-- why is_pinned / is_sponsored / more_remaining are TRI-STATE in ItemDraft: a `bool = False`
+-- default has a structurally 100% fill rate and the alarm can never sound on it.
 CREATE TABLE field_stats (
   run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
   field  TEXT NOT NULL,
@@ -487,8 +503,12 @@ CREATE TABLE field_stats (
 CREATE TABLE usage_counters (
   source TEXT NOT NULL,
   period TEXT NOT NULL,                 -- '2026-09' (UTC billing month)
-  metric TEXT NOT NULL,                 -- 'reads' | 'cost_micros'
-  value  INTEGER NOT NULL DEFAULT 0,
+  -- SINGLE-VALUED ON PURPOSE. An earlier draft allowed 'reads' as well, and the frozen
+  -- config in two documents then disagreed about which one the cap used. A governor
+  -- reading a metric the ingest path does not write sees a month-to-date of ZERO and
+  -- never fires. `cost_micros` is the survivor because it survives a repricing.
+  metric TEXT NOT NULL CHECK (metric = 'cost_micros'),
+  value  INTEGER NOT NULL DEFAULT 0,    -- micro-dollars spent this period
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (source, period, metric)
 ) STRICT, WITHOUT ROWID;
@@ -553,7 +573,8 @@ CREATE INDEX idx_env_purge   ON envelopes(purge_after) WHERE purge_after IS NOT 
   -- serves: the retention sweep. Partial, so it only touches rows that HAVE a TTL.
 
 -- ONE ROW PER FETCH EVENT.
--- This split is the single most important correction to PLAN.md §4, whose `sha256 UNIQUE`
+-- This split is the single most important correction to the original plan's `raw_payloads`
+-- (see PLAN.md §5.5), whose `sha256 UNIQUE`
 -- on a table also carrying captured_at collapses Monday, Tuesday and Wednesday fetches of
 -- an unchanged page into ONE row with Monday's timestamp — destroying the exact input to
 -- soft-delete detection: "when did I last confirm this still existed".
@@ -717,8 +738,10 @@ CREATE INDEX idx_item_versions_time ON item_versions(item_id, observed_at);
 -- Non-reply edges: quote, retweet, forward, crosspost, album. NOT parent edges.
 CREATE TABLE item_relations (
   from_item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  -- No 'pinned_in': pinning is items.is_pinned, no source mapping ever emitted it, and the
+  -- CHECK must match RelationDraft.rel in ARCHITECTURE.md §5 exactly.
   rel TEXT NOT NULL CHECK (rel IN
-    ('quote_of','repost_of','forward_of','crosspost_of','album_member','pinned_in')),
+    ('quote_of','repost_of','forward_of','crosspost_of','album_member')),
   to_ref       TEXT NOT NULL,           -- ALWAYS written, even when unresolvable
   to_item_id   INTEGER REFERENCES items(id),
   to_source    TEXT,
@@ -731,10 +754,16 @@ CREATE INDEX idx_relations_to ON item_relations(to_item_id, rel);
 -- N:M provenance, bounded: role='primary' only (the envelopes that produced or updated
 -- CONTENT). Metric-refresh batches do not write here, so this cannot grow one row per item
 -- per daily re-observation.
+--
+-- The single-valued CHECK on `role` is the point, and it is why the column exists at all:
+-- boundedness is a property of the SCHEMA rather than a convention in the writer, and
+-- adding a second role becomes a migration — which is the review checkpoint ADR-0048
+-- wants. Same pattern as the CHECK that used to guard author_person_links.linked_by.
 CREATE TABLE item_envelopes (
   item_id      INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
   envelope_seq INTEGER NOT NULL REFERENCES envelopes(seq) ON DELETE CASCADE,
-  PRIMARY KEY (item_id, envelope_seq)
+  role         TEXT NOT NULL DEFAULT 'primary' CHECK (role IN ('primary')),
+  PRIMARY KEY (item_id, envelope_seq, role)
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX idx_item_env_rev ON item_envelopes(envelope_seq);
   -- serves: reparse — "which items did this envelope produce?"
@@ -758,8 +787,12 @@ CREATE TABLE media (
   id         INTEGER PRIMARY KEY,
   item_id    INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
   ord        INTEGER NOT NULL DEFAULT 0,
+  -- No 'location' kind. scrub() drops latitude/longitude/geo/gps/venue/location before
+  -- persistence and assert_clean() raises PIILeak if one survives, so reserving a media
+  -- kind for exactly that data class would create somewhere to put what nothing may write.
+  -- Same structural argument as "there is no phone column" (ADR-0027).
   kind       TEXT NOT NULL CHECK (kind IN
-               ('image','video','audio','voice','file','sticker','link_card','poll','location')),
+               ('image','video','audio','voice','file','sticker','link_card','poll')),
   url        TEXT,
   url_sha256 TEXT NOT NULL,             -- FB/TG media URLs are long and expire; key on the hash
   thumb_url  TEXT, mime TEXT, byte_len INTEGER,
@@ -884,8 +917,17 @@ SELECT i.id, i.source, c.kind AS container_kind, c.privacy,
 -- the user's own is_from_self rows are never masked.
 ```
 
-**Object count, both files:** 32 tables, 42 indexes, 5 triggers, 1 view — 80 rows in
-`sqlite_master`, executed clean on 3.51.0.
+**Object count, both files:** 30 tables, 41 indexes, 5 triggers, 1 view — **77 rows** in
+`sqlite_master`, executed clean on 3.51.0 (`PRAGMA integrity_check` → `ok`). Re-executed
+after the corrections in this section: both `targets_ack_*` triggers ABORT, `media.kind =
+'location'` is rejected, `usage_counters.metric = 'reads'` is rejected, and
+`ALTER TABLE items ADD COLUMN … VIRTUAL` still succeeds on a populated table.
+
+> **Standing rule, added because it is how three documents drifted.** This section is the
+> **only** copy of the DDL. Any DDL fragment quoted anywhere else in this document set must
+> be a **copy of the executed text**, never a paraphrase, and must carry a link back here.
+> If a fragment elsewhere disagrees with this section, this section is right and the other
+> one is a bug.
 
 ---
 
@@ -1372,21 +1414,36 @@ across a three-day outage shows a flat line and then a cliff, not a gradual rise
 accurate but easy to misread. Any charting layer should join against `runs` and shade the
 periods where no observation happened.
 
-The related cost: 3,000 tracked items re-observed daily is over a million envelope rows a
-year whose entire information content is *"still 220"*. The named remedy is a compaction
-pass that collapses runs of byte-identical envelopes for one target into one row plus an
-occurrence count, triggered when either database file crosses 10 GB.
+**The related cost, with the arithmetic done rather than asserted.** An earlier draft said
+"3,000 tracked items re-observed daily is over a million envelope rows a year" and used that
+number to justify a deferred compaction pass. It was wrong by about two orders of magnitude,
+and the design refutes it three ways:
+
+1. **Re-observation is batched.** `/api/info` takes ~100 fullnames per call, so 3,000
+   tracked posts cost **~30 requests a day**, and one request is one envelope — ~11,000
+   envelope rows a year, not 1.1M.
+2. **The schedule stops.** `+1h / +6h / +24h / +72h / +7d, then stop` means each item
+   generates **five** refresh events in its lifetime. Nothing is re-observed daily forever.
+3. **Byte-identical responses do not create envelope rows at all** — they create
+   `envelope_fetches` rows of roughly 40 bytes each, which is the whole point of the split
+   below.
+
+So the growth term that actually matters is `envelope_fetches`, plus Facebook's HTML
+snapshots at ~50 KB compressed per scroll step. The compaction pass has been **dropped, not
+deferred** (see [../PLAN.md](../PLAN.md) §11): the retention sweep and `envelopes.purge_after`
+already bound the store, and a trigger sized against a hundredfold-inflated number is worse
+than no trigger.
 
 ---
 
 ## 7. Raw payloads and reparse
 
-### The split that PLAN.md §4 got wrong
+### The split the original `raw_payloads` got wrong
 
-PLAN.md put `sha256 TEXT NOT NULL UNIQUE` on a table that also carries `captured_at`. Fetch
-an unchanged page on Monday, Tuesday and Wednesday and you get **one row with Monday's
-timestamp**. The re-fetch history is destroyed, and with it the exact input to soft-delete
-detection: *when did I last confirm this still existed?*
+The original plan put `sha256 TEXT NOT NULL UNIQUE` on a table that also carries
+`captured_at`. Fetch an unchanged page on Monday, Tuesday and Wednesday and you get **one row
+with Monday's timestamp**. The re-fetch history is destroyed, and with it the exact input to
+soft-delete detection: *when did I last confirm this still existed?*
 
 - `envelopes` — one row per **distinct byte sequence**. `sha256` UNIQUE. Free dedupe.
 - `envelope_fetches` — one row per **fetch event**. History.
@@ -1397,11 +1454,27 @@ $ sqlite3 t.db "SELECT e.kind, e.sha256, count(*)||' fetches',
        datetime(max(f.fetched_at),'unixepoch','+7 hours')
   FROM envelopes e JOIN envelope_fetches f ON f.envelope_seq=e.seq
  GROUP BY e.seq HAVING count(*)>1;"
-fb.feed_html|sha-f1|2 fetches|2026-08-29 14:58:20|2026-08-30 14:53:20
+reddit.info|sha-r7|2 fetches|2026-08-29 14:58:20|2026-08-30 14:53:20
 ```
 
 One stored body, two confirmations, a day apart. Under the single-table design that second
 observation does not exist.
+
+**Read the example carefully: it is a Reddit one, and that is deliberate.** `reddit.info` on
+a batch of unchanged posts genuinely returns the same bytes day after day, which is where
+the dedupe fires. **Facebook is the connector where it essentially never fires**, because
+`fb.feed_html` bodies are per-scroll-step *deltas* built from the posts not yet seen in this
+run (see [./sources/facebook.md](./sources/facebook.md) §7.1): different runs produce
+different fresh sets, different orderings and different embedded tracking params, and within
+a single run the sets are disjoint by construction. So for Facebook, *"when did I last
+confirm this post existed"* does **not** come from `envelope_fetches` at all — it comes from
+`items.last_seen`, bumped by the upsert, and from `items.absence_streak`. Both mechanisms
+are real; they just belong to different connectors, and the schema serves both.
+
+*(Reddit's scores are mutable and possibly vote-fuzzed, so a `reddit.info` batch is only
+byte-identical while nothing in it moved. That is common for a batch of week-old posts and
+rare for a batch of fresh ones — which is exactly the shape the decaying re-observation
+ladder assumes.)*
 
 ### Why `AUTOINCREMENT` is load-bearing
 
@@ -1450,7 +1523,10 @@ Reparse is one mechanism, not a per-connector special case.
 
 ```sql
 -- 1. what is behind the current parser
-SELECT e.seq, e.source, e.kind, e.body, e.codec, e.dict_id, e.content_type, e.captured_at
+SELECT e.seq, e.source, e.kind, e.body, e.codec, e.dict_id, e.content_type,
+       e.first_captured_at            -- the COLUMN. `Envelope.captured_at` is the
+                                      -- dataclass field; the column was renamed when
+                                      -- envelope_fetches took over per-event history.
   FROM envelopes e
   JOIN parsers p ON p.source = e.source AND p.kind = e.kind
  WHERE e.parser_version < p.parser_version
@@ -1513,9 +1589,9 @@ the exact failure raw-first storage exists to let you recover from.
 
 The named future extension is **projection A/B diffing**: `--rebuild items --into items_v8`
 rebuilds from stored envelopes into a shadow table, then diffs row counts and per-field fill
-rates before you promote. Trigger: the second Facebook parser rewrite after a DOM rotation.
-It converts the fill-rate canary from an alarm that fires three weeks late into a
-pre-flight check on your own fix.
+rates before you promote. It converts the fill-rate canary from an alarm that fires three
+weeks late into a pre-flight check on your own fix. It is deferred, with its trigger — the
+second Facebook parser rewrite after a DOM rotation — in [../PLAN.md](../PLAN.md) §11.
 
 ---
 
@@ -1763,9 +1839,19 @@ predicate is the insert predicate, because both are "always".
 
 ### Tokenizer: `unicode61 remove_diacritics 2`
 
-`remove_diacritics 1` cannot handle characters composed with *multiple* combining marks,
-which is precisely Vietnamese — `ế` is e + circumflex + acute. Setting `2` is the only
-correct choice, and it folds both directions. Verified on real Vietnamese text:
+`remove_diacritics 1` leaves diacritics in place for a **single codepoint carrying more than
+one diacritic** — which is most of the Vietnamese vowel set (`ế` U+1EBF, `ộ` U+1ED9, `ằ`
+U+1EB1 …). Only `remove_diacritics 2` folds them, and it folds both directions.
+
+Say it that way rather than "multiple combining marks", because the two are different
+problems and only one of them this setting solves. **This says nothing about NFD-decomposed
+input**: a base letter followed by combining marks is a Unicode *normalisation* concern that
+`remove_diacritics 2` does not address at all. If any source can deliver decomposed text,
+normalise to NFC before insert — a mixed-normalisation FTS index fails silently, matching
+some rows and not others with no error anywhere. Confirm at M1 whether any connector
+delivers NFD.
+
+Verified on real Vietnamese text:
 
 ```
 $ MATCH '"ha noi"'    -> Ai đi Hà Nội cuối tuần này không?
@@ -1891,11 +1977,14 @@ the Keychain, never in the DB. Documented honestly as **pseudonymization, not
 anonymization**: platform ids are a low-entropy enumerable space, and anyone holding both
 the DB and the pepper can rebuild the mapping.
 
-**`identity_mode` defaults to `clear` in both files.** A private DM archive full of `P-7f3a`
-labels is useless to its owner, and pseudonymizing the author column while storing full
-message text is theatre — names appear in the text. The controls that actually work are
-scope, encryption, retention, export gating and purge. `actor_hmac` is present regardless
-so `purge --person` stays a one-liner.
+**Identity is stored `clear` in both files, and there is no per-target `identity_mode`
+column.** A private DM archive full of `P-7f3a` labels is useless to its owner, and
+pseudonymizing the author column while storing full message text is theatre — names appear
+in the text. The controls that actually work are scope, encryption, retention, export gating
+and purge. `actor_hmac` is present regardless so `purge --person` stays a one-liner, and
+masking happens in `v_items_masked` at export time, keyed off `containers.privacy` and
+`items.is_from_self` — never off a per-target flag. A column with no reader is worse than no
+column, so the column is gone (ADR-0026).
 
 ### Redaction must not undo itself
 
@@ -2336,8 +2425,16 @@ snapshots are unchanged.
 
 ## 13. Defects found while validating the frozen DDL
 
-Two. Both were found by executing the frozen text rather than reading it. Neither changes
-the design; both change the statements you type.
+Three. All were found by executing the frozen text rather than reading it. None changes the
+design; all three change the statements you type.
+
+> **The standing rule that comes out of all three, stated once.** Every one of these was a
+> case where **the DDL was executed and the surrounding prose was not.** So: §3 is the only
+> copy of the schema. A DDL fragment quoted in any other document — including
+> [./GOVERNANCE.md](./GOVERNANCE.md) §3 and §16, [../ARCHITECTURE.md](../ARCHITECTURE.md)
+> §4, and the source docs — must be a **verbatim copy of the executed text with a link back
+> here**, never a paraphrase and never a remembered version. A paraphrased constraint is a
+> constraint nobody ran.
 
 ### 13.1 `targets`' `ack_third_party` CHECK is not valid SQLite
 
@@ -2368,7 +2465,12 @@ conversation target, ack=1  ->  inserted OK
 ```
 
 Both `INSERT` and `UPDATE` need a trigger; a single insert trigger leaves an
-`UPDATE targets SET ack_third_party = 0` unguarded.
+`UPDATE targets SET ack_third_party = 0` unguarded. Re-executed after the §3 corrections:
+the insert trigger and the update trigger both `ABORT` with SQLITE_CONSTRAINT (19).
+
+**Do not "fix" the parse error by dropping the second clause.** `CHECK (ack_third_party = 1)`
+parses fine and makes **every broadcast target unenrollable** — a strictly worse outcome than
+the original bug, arrived at by the most natural debugging move available.
 
 ### 13.2 The redaction guard in the frozen upsert protects the wrong column
 
@@ -2420,9 +2522,28 @@ Two notes on why this matters more than it looks:
 - Add this to the redaction test explicitly: redact, then `crawler reparse`, then assert
   both zero FTS hits and NULL content — not just zero new rows.
 
+### 13.3 `item_envelopes` had no `role` column, and five documents read one
+
+`role='primary'` was written or filtered on in five places across four documents — the
+`commit_envelope()` transaction diagram, the generic reparse flow, ADR-0048's entire
+rationale, and Reddit's provenance join — while the frozen `CREATE TABLE item_envelopes`
+had `item_id` and `envelope_seq` and nothing else.
+
+That made ADR-0048's guarantee ("metric refreshes never write provenance rows") an
+**unwritten convention in the writer**: nothing enforced it, nothing could audit it
+afterwards, and nothing distinguished a content envelope from a metric envelope in the
+table. The column is now in §3 with `CHECK (role IN ('primary'))` and in the primary key, so
+the boundedness is a schema property and a second role is a migration. The object count in
+§3 was re-derived after the change: **77**, not 80.
+
 ---
 
 ## 14. Verify before building
+
+**This is the schema-facing subset.** The consolidated, project-wide checklist — every
+unverified claim in every document, with how to check it and roughly how long that takes —
+is [../PLAN.md](../PLAN.md) §12. Where the two overlap, PLAN §12 is the list to work from;
+this section carries the schema-specific consequence of each answer.
 
 Nothing here blocks the schema — it is frozen and it executes. These are the claims the
 schema *touches* that were not confirmed at first-party level, carried forward from recon
@@ -2430,7 +2551,25 @@ with their confidence intact. Do not let any of them silently become fact.
 
 | # | Claim | Status | How to settle it | Impact if wrong |
 |---|---|---|---|---|
-| 1 | The vendored SQLCipher build in `sqlcipher3` 0.6.2 has **FTS5** compiled in | **UNVERIFIED** | `SELECT * FROM pragma_compile_options();` on the first `private.db` — an M0 check | Conversation full-text search is unavailable; the rest of `private.db` is unaffected. FTS in `private.db` is opt-in anyway, so this is not a blocker. |
+| 1 | The vendored SQLCipher build in `sqlcipher3` 0.6.2 has **FTS5** compiled in | **UNVERIFIED** | `SELECT * FROM pragma_compile_options();` on a `sqlcipher3` connection — **the first thing M0 does**, with two written branches below | **Not "nothing else changes."** If FTS5 is absent, `CREATE VIRTUAL TABLE items_fts` fails and the statement list cannot be applied to `private.db` **at all**, which breaks invariant #4. See the fork below. |
+
+**The FTS5-in-SQLCipher fork, written out rather than waved off.** The "identical DDL in
+both files" invariant (§15 #4) is what makes `rm data/private.db` safe, what lets the
+migration runner apply one statement list to both, and what `doctor`'s version-equality
+check tests on every run. It rests on this unverified fact, so the fork gets specified
+before it is needed:
+
+| M0 answer | What ships |
+|---|---|
+| **FTS5 present** (expected) | Nothing changes. Identical statement list, both files, `77` objects each. |
+| **FTS5 absent** | `private.db` gets the **same statement list minus the five FTS objects** (`items_fts` + `items_ai` / `items_ad` / `items_au`). `schema_versions` gains a `_core.fts` row recording the divergence as a **declared state**, `doctor` reports it as declared rather than as an error, and `crawler search --private` degrades to a `LIKE` scan over `items.text`. At personal DM volume a `LIKE` scan is milliseconds, so the loss is ranking, not capability. |
+
+Both branches preserve what actually matters: conversations stay searchable (which is the
+flaw ADR-0024 rejected), `rm private.db` stays complete, and the divergence is a recorded
+fact rather than a surprise. What is **not** acceptable is the earlier framing — "FTS in
+`private.db` is opt-in anyway, so this is not a blocker" — which was wrong twice over:
+[./GOVERNANCE.md](./GOVERNANCE.md) §2.1 lists conversation full-text search as
+unconditional, and a failed `CREATE VIRTUAL TABLE` takes the whole migration with it.
 | 2 | Reddit still **vote-fuzzes** displayed scores | UNVERIFIED | compare repeated `/api/info` reads of one post | Only affects whether `approximate=1` is honest. Set it anyway — it costs one bit and cannot be retrofitted onto history. |
 | 3 | `/api/info` accepts **100 fullnames** per call | UNVERIFIED (widely cited) | one live call | Metric re-observation costs scale proportionally. Still small. |
 | 4 | Reddit's Data API terms require **dropping deleted content** even de-identified | UNVERIFIED (secondary sources; the primary pages returned 403 to automated fetch) | read the Data API Wiki and Terms in a browser | Decides whether `on_upstream_delete` is `follow`-locked for Reddit. Ship `follow` regardless; it is the conservative default. |
@@ -2465,7 +2604,10 @@ Eleven statements. If one of them stops being true, something is wrong.
 2. **Privacy is a property of the container**, resolved by core, only ever raised.
 3. **A target maps to exactly one container, which maps to exactly one file.** Routing is
    total.
-4. **Identical DDL in both files**, so `rm data/private.db` is complete and consistent.
+4. **Identical DDL in both files**, so `rm data/private.db` is complete and consistent —
+   with exactly one declared, recorded exception if M0 finds no FTS5 in the SQLCipher build
+   (§14 item 1). A divergence that `schema_versions` records is a declared state; a
+   divergence nobody wrote down is the bug this invariant exists to prevent.
 5. **Conversation envelopes go to `private.db` too**, not just parsed rows.
 6. **`parent_ref` is always written**, even when unresolvable. `thread_path` may be NULL and
    correctness never depends on it.

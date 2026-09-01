@@ -6,10 +6,14 @@ This document describes the shape of the system: what core owns, what a connecto
 owns, and the exact seam between them. It does not describe the schema (see
 [./docs/DATA-MODEL.md](./docs/DATA-MODEL.md)), the per-source transports (see
 [./docs/sources/](./docs/sources/)), or the build order (see [./PLAN.md](./PLAN.md) §6
-for the numbered milestones and [./ROADMAP.md](./ROADMAP.md) for the phase shape and
-deferred-item triggers). Every decision here is justified once, in
-[./docs/DECISIONS.md](./docs/DECISIONS.md); this document says *what*, that one says
-*why*, and neither repeats the other.
+for the numbered milestones and §11 for the deferred list and its triggers). Every
+decision here is justified once, in [./docs/DECISIONS.md](./docs/DECISIONS.md); this
+document says *what*, that one says *why*, and neither repeats the other.
+
+**Two things this document owns outright**, because they were being invented
+independently in five places: **§6** — the capability model, whose per-connector matrix is
+*derived* from the `caps = (...)` block in each source doc — and **§11** — the CLI surface,
+which is the single normative list of commands, flags and exit codes.
 
 All code blocks are **illustrative**. Nothing in this repository is executable yet.
 
@@ -59,11 +63,15 @@ TL batch into a single call shape that none of them fit. Downstream of the bytes
 everything the tool promises is uniform: one timeline, one search index, one
 governance boundary, one error taxonomy, one replay.
 
-Shape D does not get its own scheduler lane. A push transport writes signed bytes into
-a local spool directory and the *ordinary scheduled* `fetch()` drains that directory —
-which collapses persistent-stream, inbound-webhook and polled-HTTP into shape B, and
-makes the archive-ZIP importer the same code path as the spool drain. The scheduler
-therefore sees **two lanes, not four**: "needs a GUI" and "does not".
+Shape D does not get its own scheduler lane. The shape that ships at v1 is the **archive
+ZIP**: `Cap.FILE_IMPORT`, a `fetch()` that reads a local path, no daemon and no new
+operational surface. The genuinely-push half of shape D — a webhook or a persistent stream
+— **is not built at v1 and has no producer**: Telegram listen mode is deferred with its own
+trigger, and all three Zalo transports are deferred or impossible. The design for it
+(a `Receiver` writing into a spool that the ordinary scheduled `fetch()` drains) is kept in
+[./docs/DECISIONS.md](./docs/DECISIONS.md) ADR-0036 for the day one arrives, and it is
+marked not-built there. The scheduler therefore sees **two lanes, not four**: "needs a GUI"
+and "does not".
 
 > **Litmus test, run at every architecture review:** delete `connectors/facebook/`.
 > Core must still compile and its tests must still pass. If it does not, something
@@ -103,18 +111,16 @@ crawler/
     media.py        link vs download; content-addressed store under media/ab/cd/<sha256>
     commit.py       commit_envelope(): the one transaction that orders bytes before cursor
     registry.py     REGISTRY dict of "module:factory"; THE ONLY module permitted to import a connector
-    tick.py         the scheduler body: due targets, lanes, flocks, budget, drain, sweeps
-    spool.py        Spool.put()/drain(); 256MB quota, 72h TTL          [SPECIFIED, UNBUILT at v1]
-    receivers.py    Receiver supervision + StopSignal                  [SPECIFIED, UNBUILT at v1]
+    tick.py         the scheduler body: due targets, lanes, flocks, budget, sweeps
     retain.py       retention sweep, purge, redactions, secure vacuum
     export.py       default-deny export by privacy class + sidecar manifest
     fts.py          search entry points; doctor --repair rebuild
-    doctor.py       preflight: sqlite version, FileVault, Keychain, locks, spool quota
+    doctor.py       preflight: sqlite version, FileVault, Keychain, locks, profile age
     schema/         _core.sql, facebook.sql, telegram.sql, … applied IDENTICALLY to both files
 
   connectors/
     fixture.py      FixtureConnector — satisfies the Protocol, replays recorded envelopes
-    facebook/       driver.py stealth.py feed.py parse.py errors.py  (selenium lives ONLY here)
+    facebook/       driver.py fetch.py parse.py walls.py errors.py  (selenium lives ONLY here)
     telegram/       client.py peers.py slices.py parse.py errors.py  (telethon lives ONLY here)
     reddit/         auth.py wire.py listings.py comments.py parse.py errors.py
     x/              wire.py timeline.py archive.py parse.py errors.py
@@ -124,8 +130,21 @@ tests/
   fixtures/<source>/…    captured by `crawler capture --redact`, never hand-copied
   golden/<source>/…      sha256(canonical_json(ParseResult)) per fixture per parser_version
 scripts/
-  run-tick.sh  run-receivers.sh  *.plist templates (no secrets in the templates)
+  run-tick.sh  vn.moonbase.crawlersocial.tick.plist  (a template; no secrets in it)
 ```
+
+**Three modules an earlier draft listed that are deliberately absent.** `core/spool.py` and
+`core/receivers.py` are cut with the push lane (§2, §8); they had no producer at v1 and no
+test. `connectors/facebook/stealth.py` is cut because driver construction *is* where the
+stealth options live — a separate module for "the options we pass to the driver we build in
+the module next door" is a seam with nothing on either side of it. The isolation argument
+that module carried survives and is stronger for being general: every third-party client
+(selenium, telethon, prawcore) lives inside its connector directory and never leaks a type
+across the `Envelope` boundary.
+
+`connectors/facebook/fetch.py` is the scroll-and-harvest generator and
+`connectors/facebook/walls.py` is the wall classifier ported from `challenge.py`. Those
+names are the ones the milestones use; nothing is called `feed.py`.
 
 ### Import DAG
 
@@ -135,14 +154,14 @@ Layers import only downward. No cycle exists at any layer.
 L0  contract, config                      stdlib only. contract imports NOTHING from core.
 L1  log, codec, pace, pii, secrets, verdict, http        -> L0
 L2  db  -> L0,L1(secrets,log)             gov -> L0
-L3  ident, cursors, runs, usage, coverage, upsert, threads, media, spool  -> L0..L2
+L3  ident, cursors, runs, usage, coverage, upsert, threads, media  -> L0..L2
 L4  commit  -> L0..L3   (db, upsert, cursors, coverage, runs, ident, codec, gov, pii)
 L5  registry -> L0 + importlib            (resolves connector strings LAZILY)
 L6  tick -> L0..L5
 L7  retain, export, fts, doctor -> L0..L4    (siblings of tick, never imported BY tick)
 L8  cli -> everything
 
-connectors/<source>/ -> contract, and optionally the helpers: http, pace, spool, log, codec
+connectors/<source>/ -> contract, and optionally the helpers: http, pace, log, codec
 ```
 
 **Three rules that keep this a DAG, enforced at review:**
@@ -160,20 +179,21 @@ asserts `'selenium' not in sys.modules`. See §13.
 
 ---
 
-## 4. Data flow: `sync` to rows in SQLite
+## 4. Data flow: `crawl` to rows in SQLite
 
 Two connectors, two completely different transports, one core. The **only** place the
-two paths differ is inside the double-ruled boxes.
+two paths differ is inside the double-ruled boxes. Every command spelling below is a row
+in §11, which is the only place they are defined.
 
 ```
- $ crawler sync --source facebook --target vnexpress --limit 200        BROWSER
- $ crawler sync --source reddit   --target r/vietnam  --mode daily      API
+ $ crawler crawl --source facebook --target vnexpress --limit 200       BROWSER
+ $ crawler crawl --source reddit   --target r/vietnam                   API
          │
          ▼
  ┌── cli.py ───────────────────────────────────────────────────────────────────┐
  │ argparse → Config → doctor preflight:                                       │
  │   sqlite3.sqlite_version_info >= (3,45) · `fdesetup status` · Keychain reads │
- │   · no stale flock · spool under quota                                       │
+ │   · no stale flock · facebook profile age >= threshold                       │
  └─────────────────────────────────────────────────────────────────────────────┘
          │
          ▼
@@ -223,6 +243,8 @@ two paths differ is inside the double-ruled boxes.
  │       └─ no  → continue                                                     │
  │  8  coverage.record_gap(...)                → gaps                          │
  │  9  runs.tally(...) + field_stats(run_id, field, seen, filled)              │
+ │       ← written from res.field_stats: dict[str,(seen,filled)]. NOT from     │
+ │         diagnostics, which is free text and carries no counts.              │
  │ 10  cursors.write(env.cursor_after)   ← LAST, and only if durable.          │
  │       The cursor can never outrun the bytes.                                │
  └─────────────────────────────────────────────────────────────────────────────┘
@@ -270,9 +292,9 @@ constants for kinds, frozen dataclasses, stdlib-only in core,
 
 Nothing crosses this boundary except an Envelope. There is no Fetcher base
 class, no Transport abstraction, no shared connector superclass -- a Selenium
-scroll, an HTTP GET, an MTProto RPC batch and a drained webhook spool have
+scroll, an HTTP GET, an MTProto RPC batch and a local archive ZIP have
 nothing in common upstream of the bytes they produce. There are shared
-*helpers* a connector may import (core.http, core.pace.Bucket, core.spool);
+*helpers* a connector may import (core.http, core.pace.Bucket, core.codec);
 helpers, not inheritance.
 """
 from __future__ import annotations
@@ -476,10 +498,16 @@ class ItemDraft:
     url: str | None = None
     permalink: str | None = None
     lang: str | None = None
-    is_pinned: bool = False
-    is_sponsored: bool = False
-    is_from_self: bool = False
-    more_remaining: int = 0         # a partial tree that SAYS it is partial is correct
+    # TRI-STATE, and it is load-bearing. None means "the selector matched nothing";
+    # False/0 means "the parser positively observed the absence of the badge". With a
+    # `bool = False` default a broken selector is indistinguishable from a real negative,
+    # the field's fill rate is structurally 100%, and the canary can never fire on it --
+    # which matters most for is_pinned, the field the Facebook watermark stop rule depends
+    # on (docs/sources/facebook.md §9 guard 2).
+    is_pinned: bool | None = None
+    is_sponsored: bool | None = None
+    more_remaining: int | None = None   # a partial tree that SAYS it is partial is correct
+    is_from_self: bool = False          # not guard-critical; every source knows it
     extra: Mapping[str, Any] = field(default_factory=dict)   # -> jsonb
 
 
@@ -498,6 +526,8 @@ class MediaDraft:
     item_ref: str
     ord: int
     kind: str                       # image|video|audio|voice|file|sticker|link_card|poll
+                                    # deliberately NO 'location': scrub() drops geo keys
+                                    # and the media.kind CHECK matches this list exactly
     url: str | None
     thumb_url: str | None = None
     mime: str | None = None
@@ -512,6 +542,8 @@ class MediaDraft:
 class RelationDraft:
     from_ref: str
     rel: str                        # quote_of|repost_of|forward_of|crosspost_of|album_member
+                                    # matches the item_relations.rel CHECK exactly.
+                                    # Pinning is items.is_pinned, never a relation.
     to_ref: str
     to_source: str | None = None
 
@@ -531,7 +563,17 @@ class ParseResult:
     drafts: list[Draft] = field(default_factory=list)
     found: int = 0                          # items actually recovered from these bytes
     partial: bool = False
-    diagnostics: list[str] = field(default_factory=list)   # feeds the fill-rate canary
+
+    # THE CANARY INPUT. field -> (seen, filled). Core copies these straight into
+    # field_stats(run_id, field, seen, filled). A list[str] cannot carry a triple, which
+    # is why this is a separate, structured field rather than a use of `diagnostics`.
+    # `filled` counts drafts where the parser positively recovered a value -- which is
+    # only well defined because the guard-critical ItemDraft fields are tri-state.
+    field_stats: dict[str, tuple[int, int]] = field(default_factory=dict)
+
+    # Free text for a human reading a run report: "3 posts had no timestamp anchor",
+    # "tweets part-file 4 absent from this archive". Core RENDERS it and never parses it.
+    diagnostics: list[str] = field(default_factory=list)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -611,17 +653,11 @@ class Connector(Protocol):
     def close(self) -> None: ...
 
 
-class Receiver(Protocol):
-    """Push transports ONLY. Writes bytes to a local spool. NEVER opens SQLite
-    -- that is what keeps exactly one process writing rows, keeps a listener
-    from contending with the batch job on the WAL, and scopes
-    AUTH_KEY_DUPLICATED to one flock."""
-    source: str
-
-    def serve(self, spool: "Spool", stop: "StopSignal") -> None:
-        """Long-lived. spool.put(headers, body) is durable on return (fsync,
-        then atomic rename). Returns when stop.set(). Subject to the spool
-        quota (256MB) and TTL (72h) enforced by core."""
+# There is deliberately NO `Receiver` Protocol at v1. A push transport would need one;
+# none exists (§2, §8) and every candidate producer is deferred or impossible, so the
+# Protocol, the spool, its quota, its TTL and its LaunchAgent are all cut. The design is
+# kept in DECISIONS ADR-0036 and marked not-built. `Cap.FILE_IMPORT` covers the one shape
+# that does ship -- the X archive ZIP -- with a path and no daemon.
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -694,14 +730,14 @@ class Cap(Flag):
     NEEDS_SESSION    = auto()   # bounded, supervised, expensive to open
     NEEDS_GUI        = auto()   # implies NEEDS_SESSION; must run in an Aqua session
     SINGLE_FLIGHT    = auto()   # exactly one process may hold this credential (flock)
-    PUSH             = auto()   # has a Receiver; core supervises it and drains its spool
-    FILE_IMPORT      = auto()   # fetch() reads a local path (archive ZIP, drained spool)
+    FILE_IMPORT      = auto()   # fetch() reads a local path (the X archive ZIP)
     PARALLEL_TARGETS = auto()   # thread pool vs strictly serial
-    NEEDS_HUMAN_LOGIN= auto()
+    NEEDS_HUMAN_LOGIN= auto()   # `crawler login --source X` exists for this connector
     # what the source can actually give
     BACKFILL         = auto()
-    BACKFILL_CAPPED  = auto()   # walks back to a hard ceiling, then stops
-    EXACT_CURSOR     = auto()   # resume needs no overlap re-read
+    BACKFILL_CAPPED  = auto()   # walks back to a hard ceiling, then stops. IMPLIES BACKFILL
+                                # for CLI argument validation.
+    EXACT_CURSOR     = auto()   # resume needs NO overlap re-read AT ALL
     COMMENT_TREE     = auto()
     MUTABLE_METRICS  = auto()   # counts drift; core schedules re-observation
     DELETE_EVENTS    = auto()   # transport reports deletions; skip the absence sweep
@@ -709,6 +745,12 @@ class Cap(Flag):
     BILLED           = auto()   # every request costs money; core enforces a spend counter
     CONVERSATIONS    = auto()   # can reach third parties' private data
 ```
+
+**`Cap.PUSH` does not exist**, and its absence is deliberate rather than an oversight. It
+would have gated a `Receiver`, a spool, a quota, a TTL, two doctor checks and a second
+always-on LaunchAgent — for **zero producers**. Every candidate is deferred or impossible
+(§2). The flag comes back with the first real push transport, alongside the rest of
+ADR-0036; adding it later is cheap precisely because nothing today pretends it is there.
 
 **The standing rule: a capability may exist only if core branches on it.** Every flag
 below names the exact branch point. If a review cannot find the `if caps & X`, the
@@ -719,38 +761,64 @@ flag is documentation and belongs in the README, not the enum.
 | `NEEDS_SESSION` | `tick.py` lane assignment | serialise the source; set `Budget.deadline_ts`; `close()` in a `finally` |
 | `NEEDS_GUI` | `tick.py` preflight | refuse to run outside an Aqua session; route to the `tick` LaunchAgent; wrap in `caffeinate -i` |
 | `SINGLE_FLIGHT` | `tick.py` before `registry.build` | `flock(locks/<source>.lock, LOCK_EX\|LOCK_NB)`; if held, exit 0 silently |
-| `PUSH` | `receivers.py`, `tick.py` drain step | supervise a `Receiver`; drain `spool/<source>/` at the start of every tick |
-| `FILE_IMPORT` | `tick.py` target construction | hand `fetch()` a path instead of a network target; no bucket, no `usage.check` |
+| `FILE_IMPORT` | `tick.py` target construction | hand `fetch()` a path instead of a network target; no bucket, no `usage.check`; `crawl` is refused with an actionable message |
 | `PARALLEL_TARGETS` | `tick.py` target loop | `ThreadPoolExecutor` vs a strictly serial `for` |
 | `NEEDS_HUMAN_LOGIN` | `cli.py` | `crawler login --source X` is registered; `doctor` says "run this" instead of "broken" |
 | `BACKFILL` | `cli.py` argument validation | `--since` / `--backfill` are accepted at all |
-| `BACKFILL_CAPPED` | `cli.py` + `coverage.py` | print the ceiling and proceed; open a `gaps` row when the ceiling is hit |
-| `EXACT_CURSOR` | `tick.py` | skip the overlap re-read window; permit a connector to claim `COVER_EXACT` |
+| `BACKFILL_CAPPED` | `cli.py` + `coverage.py` | **implies `BACKFILL` for argument validation**; prints the ceiling and proceeds; opens a `gaps` row when the ceiling is hit |
+| `EXACT_CURSOR` | `tick.py` | skip the overlap re-read window entirely |
 | `COMMENT_TREE` | `tick.py` phase list | run the comment-expansion phase; `--include-replies` becomes meaningful |
 | `MUTABLE_METRICS` | `tick.py` post-run | populate and drain `metric_schedule` on the +1h/+6h/+24h/+72h/+7d ladder |
 | `DELETE_EVENTS` | `tick.py` sweep gate | **skip** the absence sweep — the transport reports deletions itself |
 | `BILLED` | `tick.py` step 4, `usage.py` | `usage.check(source)` **before** the run; `Budget.spend_units`; `runs.cost_micros` |
 | `CONVERSATIONS` | `gov.py`, `cli.py`, `export.py` | `targets add` requires `ack_third_party=1`; export is gated behind the TTY check |
 
-### Per-connector matrix
+### Per-connector matrix — **derived, not authoritative**
 
-| | facebook | telegram | reddit | x (archive) | x (rest) | zalo.bot | zalo.oa | zalo.user |
+> **The `caps = (...)` block in each source doc is the source of truth**, because that is
+> the thing that ships as code. This table is generated from those blocks and exists so you
+> can see the shape at a glance. **On any conflict, the source doc wins and this table is
+> the bug.** An earlier draft of this matrix disagreed with three of five source specs, on
+> flags core is documented to branch on — which made the disagreements behavioural rather
+> than cosmetic.
+
+| | facebook | telegram | reddit | x.archive | x.rest | zalo.bot | zalo.oa | zalo.user |
 |---|---|---|---|---|---|---|---|---|
 | `NEEDS_SESSION` | ✓ | ✓ | — | — | — | — | — | ✓ |
 | `NEEDS_GUI` | ✓ | — | — | — | — | — | — | — |
 | `SINGLE_FLIGHT` | ✓ (profile) | ✓ (`.session`) | — | — | — | — | — | ✓ |
-| `PUSH` | — | opt-in later | — | — | — | ✓ | ✓ | ✓ |
 | `FILE_IMPORT` | — | — | — | ✓ | — | — | — | — |
 | `PARALLEL_TARGETS` | — | — | ✓ | — | ✓ | — | — | — |
-| `NEEDS_HUMAN_LOGIN` | ✓ | ✓ | ✓ (one-time) | — | — | — | ✓ | ✓ |
+| `NEEDS_HUMAN_LOGIN` | ✓ | ✓ | **✓** | — | **✓** | — | ✓ | ✓ |
 | `BACKFILL` | ✓ (slow, risky) | ✓ | — | ✓ | — | — | ? | groups only |
-| `BACKFILL_CAPPED` | — | — | ✓ (~1000) | — | ✓ (~3,200) | — | ? | — |
-| `EXACT_CURSOR` | — | ✓ | — | — | ✓ (`since_id`) | — | — | — |
-| `COMMENT_TREE` | ✓ | ✓ (linked group) | ✓ | — | off by default | — | — | — |
-| `MUTABLE_METRICS` | ✓ | ✓ | ✓ | — | ✓ | — | — | — |
+| `BACKFILL_CAPPED` | — | — | ✓ (~1,000) | — | ✓ (~3,200) | — | ? | — |
+| `EXACT_CURSOR` | — | ✓ | **—** | — | ✓ (`since_id`) | — | — | — |
+| `COMMENT_TREE` | ✓ | **—** | ✓ | — | **—** | — | — | — |
+| `MUTABLE_METRICS` | ✓ | ✓ | ✓ | — | **—** | — | — | — |
 | `DELETE_EVENTS` | — | **deliberately not set** | — | — | — | — | ✓ | — |
 | `BILLED` | — | — | — | — | ✓ | — | ✓ (paid tier) | — |
 | `CONVERSATIONS` | — | ✓ | — | ✓ (DMs) | — | ✓ | ✓ | ✓ |
+
+Five of those cells were wrong in the earlier draft and are worth stating explicitly,
+because each one is a behaviour:
+
+- **`EXACT_CURSOR` means no overlap re-read *at all*, and Reddit does not set it.** Reddit
+  keeps a deliberate 6-hour overlap as insurance against clock skew, sticky posts and
+  remove-then-reinstate. Only Telegram (exact per-peer message id) and `x.rest` (Snowflake
+  `since_id`) claim it. **A coverage claim is independent of this flag**: an envelope may
+  claim `COVER_EXACT` on its own honesty about what its bytes contain, and Reddit's listing
+  envelopes correctly do. Coverage is per-envelope; the flag is about the *cursor*.
+- **`NEEDS_HUMAN_LOGIN` is set for Reddit and `x.rest`.** A one-time interactive OAuth grant
+  is exactly what the flag registers: without it `crawler login --source reddit` does not
+  exist, and both source docs route a revoked refresh token to that command.
+- **`COMMENT_TREE` is unset for Telegram.** Replies are adjacency edges and channel comments
+  are just the linked group's history — there is no comment-expansion phase to run.
+- **`COMMENT_TREE` is unset for `x.rest`.** "Off by default" is not a value a `Cap` has;
+  replies are a per-post opt-in with a hard bound, not a capability.
+- **`MUTABLE_METRICS` is unset for `x.rest`.** Re-observation costs $0.005 per post per
+  refresh, so metrics are captured once at ingest and `metric_schedule` gets no X rows.
+  Setting the flag would bill the user for exactly the refresh the connector is designed
+  to avoid.
 
 `DELETE_EVENTS` is unset for Telegram on purpose. `MessageDeleted` is documented as
 unreliable and `UpdatesTooLong` / `ChannelDifferenceTooLong` explicitly mean *"I will
@@ -816,7 +884,7 @@ that needs a second navigation. The answer is always the same: **`fetch()` emits
 second envelope.**
 
 ```python
-# connectors/facebook/feed.py -- ILLUSTRATIVE
+# connectors/facebook/fetch.py -- ILLUSTRATIVE
 def fetch(self, target, cursor, budget, gov):
     for html in self._scroll_and_snapshot(target, budget):
         yield Envelope(kind="fb.feed_html", body=html, ...,
@@ -847,7 +915,7 @@ empty columns.
 
 ## 8. Scheduling topology
 
-**Two LaunchAgents. Exactly one process ever writes SQLite. No home-grown supervisor.**
+**One LaunchAgent. Exactly one process ever writes SQLite. No home-grown supervisor.**
 
 launchd is already a supervisor; a second one is a second thing that can be down. On
 one Mac for one person that trade is not close.
@@ -856,19 +924,23 @@ one Mac for one person that trade is not close.
 
 | Agent | Trigger | Lifetime | Writes SQLite | Status at v1 |
 |---|---|---|---|---|
-| `vn.moonbase.crawlersocial.tick` | `StartCalendarInterval` 08:05 + 20:35 | seconds to ~25 min, then exits | **yes — the only writer** | built |
-| `vn.moonbase.crawlersocial.receivers` | `RunAtLoad` + `KeepAlive` | always-on | **never** | installed **empty** |
-| *(optional third)* `…crawlersocial.batch` | `StartInterval 900` | seconds | yes | not at v1 |
+| `vn.moonbase.crawlersocial.tick` | `StartCalendarInterval` 08:05 + 20:35 | seconds to ~25 min, then exits | **yes — the only writer** | **built** |
+| *(optional second)* `…crawlersocial.batch` | `StartInterval 900` | seconds | yes | deferred, with a trigger |
 
-The `receivers` agent is installed empty at v1 deliberately: the plist exists, its
-`KeepAlive{SuccessfulExit=false}` semantics get proven against a real launchd, and
-adding the first push transport later is a config change rather than a new operational
-surface. A `Receiver` fsyncs signed bytes into `spool/<source>/` and the *ordinary*
-`fetch()` drains that directory, which is what keeps the single-writer invariant true
-even once a continuous listener exists.
+**The `receivers` agent is cut.** An earlier draft installed a second always-on agent
+"empty at v1" so its `KeepAlive{SuccessfulExit=false}` semantics would be proven against a
+real launchd before anything depended on them. Three things were wrong with that. It had
+**zero producers** — every candidate push transport is deferred or impossible (§2). Nothing
+tested it: the milestone that installed it checked the *tick* agent's calendar firing and
+lid-close coalescing, so the stated reason for installing it was not achieved by anything.
+And an always-on process with no job is a failure surface with no benefit. Deleting it
+removes one process, one plist, two modules, one enum flag, two `doctor` checks and a
+retention row from a project whose stated risk is dying inside its own framework. The
+design is preserved in ADR-0036 for the day a push transport actually arrives.
 
-The optional third agent buys fresher Reddit and nothing else. Add it only if a
-12-hour Reddit lag actually annoys you; it costs a second flock contention path.
+The optional second agent buys fresher Reddit and nothing else. Add it only if a 12-hour
+Reddit lag actually annoys you; it costs a second flock contention path. Its trigger is in
+[./PLAN.md](./PLAN.md) §11.
 
 ### macOS layout
 
@@ -876,21 +948,19 @@ The optional third agent buys fresher Reddit and nothing else. Add it only if a
 ~/dev/crawler-social/                    the worktree. NO credentials, NO databases here.
   data/social.db  data/private.db        (gitignored; see ./docs/GOVERNANCE.md)
   media/ab/cd/<sha256>                   content-addressed media, never SQLite BLOBs
-  scripts/run-tick.sh  run-receivers.sh  set -euo pipefail; caffeinate wrapper
+  scripts/run-tick.sh                    set -euo pipefail; caffeinate wrapper
   scripts/*.plist                        TEMPLATES with placeholders, never real values
 
 ~/Library/Application Support/crawler-social/
   telegram/personal.session   0600       bearer credential == password + 2FA
-  chrome/default/             0700       Facebook session cookie
+  chrome/default/             0700       Facebook session cookie; its mtime is profile age
   locks/<source>.lock         0600       flock target for Cap.SINGLE_FLIGHT
-  spool/<source>/  consumed/             push bytes; 256MB quota, 72h TTL
 
 ~/Library/LaunchAgents/
   vn.moonbase.crawlersocial.tick.plist
-  vn.moonbase.crawlersocial.receivers.plist
 
 ~/Library/Logs/crawler-social/
-  tick.out.log  tick.err.log  receivers.out.log  receivers.err.log
+  tick.out.log  tick.err.log
 ```
 
 The `.session` file and the Chrome profile live **outside the worktree** so that no
@@ -898,10 +968,10 @@ The `.session` file and the Chrome profile live **outside the worktree** so that
 (iCloud/Dropbox/OneDrive) because a second concurrent use of the Telegram session from
 another IP triggers `AUTH_KEY_DUPLICATED`, which destroys the credential permanently.
 
-### The plists
+### The plist
 
 ```xml
-<!-- vn.moonbase.crawlersocial.tick.plist -->
+<!-- vn.moonbase.crawlersocial.tick.plist -- the only one -->
 <key>Label</key>                 <string>vn.moonbase.crawlersocial.tick</string>
 <key>ProgramArguments</key>
 <array>
@@ -918,23 +988,6 @@ another IP triggers `AUTH_KEY_DUPLICATED`, which destroys the credential permane
 <key>StandardErrorPath</key><string>/Users/hoangminhtu/Library/Logs/crawler-social/tick.err.log</string>
 <!-- DELIBERATELY NO KeepAlive: a batch job that exits nonzero must stay exited,
      not respawn straight back into a Facebook block. -->
-```
-
-```xml
-<!-- vn.moonbase.crawlersocial.receivers.plist  -- EMPTY of producers at v1 -->
-<key>Label</key>          <string>vn.moonbase.crawlersocial.receivers</string>
-<key>ProgramArguments</key>
-<array>
-  <string>/Users/hoangminhtu/dev/crawler-social/scripts/run-receivers.sh</string>
-</array>
-<key>RunAtLoad</key>      <true/>
-<key>KeepAlive</key>
-<dict>
-  <key>SuccessfulExit</key><false/>   <!-- exit 0 == deliberate stop; STAY stopped -->
-  <key>NetworkState</key>  <true/>    <!-- see the man-page note below -->
-</dict>
-<key>ThrottleInterval</key><integer>60</integer>
-<key>ProcessType</key>     <string>Background</string>
 ```
 
 ```bash
@@ -957,25 +1010,23 @@ All four verified locally against `man 5 launchd.plist` (Darwin, page dated 30 J
 | Fact | Verbatim / verified | Consequence here |
 |---|---|---|
 | Missed calendar firings are deferred **and coalesced** | *"Unlike cron which skips job invocations when the computer is asleep, launchd will start the job the next time the computer wakes up. If multiple intervals transpire before the computer is woken, those events will be coalesced into one event upon wake from sleep."* | **Non-negotiable:** the daily job must catch up **by cursor**, never by "fetch yesterday". A week away yields **one** run, not seven. |
-| `KeepAlive.SuccessfulExit=false` restarts on the inverse condition | *"If false, the job will be restarted in the inverse condition."* | A crash (nonzero) restarts. A `HUMAN` or `STOP` verdict alerts and exits **0**, so launchd leaves it down until `crawler resume`. This is how the error taxonomy reaches the OS. |
-| `KeepAlive` implies `RunAtLoad` | *"This key implies that RunAtLoad is set to true."* | The explicit `RunAtLoad` in the receivers plist is redundant but harmless; keep it for readability. |
-| `ThrottleInterval` default is 10s | *"by default, jobs will not be spawned more than once every 10 seconds"* | `60` slows a crash-loop from six restarts a minute to one. |
-| `LimitLoadToSessionType` applies to **agents only** | *"This key only applies to jobs which are agents."* | Correct for both plists; it is what keeps the GUI lane out of a non-Aqua context. |
+| `KeepAlive.SuccessfulExit=false` restarts on the inverse condition | *"If false, the job will be restarted in the inverse condition."* | Recorded because it is the mechanism a future push-transport agent would use. **The tick agent sets no `KeepAlive` at all**: a `HUMAN` or `STOP` verdict alerts and exits **0**, and `sources.state='stopped'` is what keeps it down until `crawler resume`. The error taxonomy reaches the OS through exit codes, not through respawn policy. |
+| `ThrottleInterval` default is 10s | *"by default, jobs will not be spawned more than once every 10 seconds"* | Not load-bearing at v1 — nothing here crash-loops by design. Relevant only if the deferred batch agent ships. |
+| `LimitLoadToSessionType` applies to **agents only** | *"This key only applies to jobs which are agents."* | Correct for the tick plist; it is what keeps the GUI lane out of a non-Aqua context. |
 
-> **One correction to carry, verified locally:** `man 5 launchd.plist` on this machine
-> documents `KeepAlive.NetworkState` as *"no longer implemented as it never acted how
-> most users expected."* The frozen plist keeps the key (it is inert, not harmful), but
-> **do not rely on it** to stop a restart loop while the Mac is offline. If offline
-> thrash turns out to matter, the working control is `ThrottleInterval` plus the
-> receiver exiting **0** when it cannot reach the network. Also note the man page's own
-> wording: *"If multiple keys are provided, launchd **ORs** them"* — a `KeepAlive`
-> dictionary is not a conjunction, which surprises most people reading it.
+> **One launchd fact worth keeping even though nothing now uses it**, verified locally:
+> `man 5 launchd.plist` on this machine documents `KeepAlive.NetworkState` as *"no longer
+> implemented as it never acted how most users expected."* If a push-transport agent is ever
+> written, do **not** reach for that key to stop an offline restart loop — the working
+> controls are `ThrottleInterval` plus exiting **0** when the network is unreachable. Note
+> also the man page's own wording: *"If multiple keys are provided, launchd **ORs** them"* —
+> a `KeepAlive` dictionary is not a conjunction, which surprises most people reading it.
 
 ### Loading and operating
 
 ```bash
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/vn.moonbase.crawlersocial.tick.plist
-launchctl kickstart -k gui/$(id -u)/vn.moonbase.crawlersocial.receivers   # force restart
+launchctl kickstart -k gui/$(id -u)/vn.moonbase.crawlersocial.tick        # force a run now
 launchctl print gui/$(id -u)/vn.moonbase.crawlersocial.tick               # last exit status
 launchctl bootout gui/$(id -u)/vn.moonbase.crawlersocial.tick             # unload
 ```
@@ -1034,7 +1085,7 @@ rate:
     mode: paranoia            # a COMMENT for humans. NO CODE BRANCHES ON THIS.
     buckets:
       navigation: { capacity: 3, refill_per_sec: 0.2 }    # ~1 navigation / 5s
-    session:                                              # PLAN.md §7, numbers UNCHANGED
+    session:                                              # PLAN.md §8, numbers UNCHANGED
       scroll_dwell_s:   [2.5, 6.0]
       post_open_dwell_s:[4, 12]
       between_targets_s:[60, 180]
@@ -1066,7 +1117,12 @@ rate:
     enabled: false            # ships OFF. Turn on only after console.x.com is confirmed.
     buckets:
       user_timeline: { capacity: 10, refill_per_sec: 0.5 }
-    spend_cap: { period: month, metric: reads, limit: 4000, on_cap: stop_and_alert }
+    # ONE metric, and it is money. `usage_counters.metric` is CHECK-constrained to
+    # 'cost_micros' precisely so a governor cannot read a metric the ingest path does not
+    # write and see a month-to-date of zero. The ceiling is typed as DOLLARS at enable
+    # time and converted to micros on the way in, so a repricing cannot silently widen it.
+    spend_cap: { period: month, metric: cost_micros, limit_usd: 25.00,
+                 on_cap: stop_and_alert }
     # 01:00Z is NOT arbitrary: X deduplicates billing within a 24h UTC window, so a run
     # plus 23h of retries must sit inside ONE UTC day. 01:00Z = 08:00 ICT.
     run_at_utc: "01:00"
@@ -1129,7 +1185,7 @@ Each row is a real, named failure. The response column is what core does, not ad
 
 | Verdict | facebook | telegram | reddit | x | zalo |
 |---|---|---|---|---|---|
-| **RETRY** | `TimeoutException`, `StaleElementReferenceException`, chromedriver crash, navigation `WebDriverException` | `ServerError` (-500), `rpc_call_fail`, DC migrate | `httpx.ConnectError`, 500 / 502 / 503 | 500 / 503, connection reset | 5xx from the OA API, spool gap |
+| **RETRY** | `TimeoutException`, `StaleElementReferenceException`, chromedriver crash, navigation `WebDriverException` | `ServerError` (-500), `rpc_call_fail`, DC migrate | `httpx.ConnectError`, 500 / 502 / 503 | 500 / 503, connection reset | 5xx from the OA API |
 | **WAIT** | soft *"You're temporarily blocked"* interstitial — **no duration is supplied**, so policy backoff 15m → 1h → 4h → stop | `FloodWaitError.seconds` — **authoritative, obeyed exactly**; `SlowModeWaitError` | 429 + `Retry-After` / `X-Ratelimit-Reset` | 429 + `x-rate-limit-reset` (epoch) | OA rate-limit error code |
 | **HUMAN** | redirect to `/login`, 2FA prompt, expired cookie | `AuthKeyUnregisteredError`, `SessionRevokedError`, `SessionPasswordNeededError`, `AuthKeyDuplicatedError` | 401 after refresh fails, app revoked | 401 invalid / revoked bearer | refresh token exhausted → browser re-authorisation |
 | **STOP** | `/checkpoint/`, *"account disabled"*, **3rd consecutive soft block** | `PeerFloodError`, `UserDeactivatedBanError`, `PhoneNumberBannedError` | 403 from abuse rules, account suspended | **monthly spend cap reached**, account suspended | OA suspended; `zca-js` account restriction |
@@ -1141,7 +1197,7 @@ Each row is a real, named failure. The response column is what core does, not ad
 **1. `WAIT` honours server-supplied durations literally.** Telegram's
 `FloodWaitError.seconds` is authoritative and is obeyed exactly. If it exceeds 300s the
 cursor is checkpointed and the run exits **75** so the next tick resumes. Facebook
-supplies nothing, so it gets policy backoff — 15m → 1h → 4h → stop, per PLAN.md §7,
+supplies nothing, so it gets policy backoff — 15m → 1h → 4h → stop, per PLAN.md §8,
 numbers unchanged.
 
 **2. `STOP` disarms the schedule and never retries.** It writes
@@ -1153,28 +1209,121 @@ Facebook block becomes a permanent one, and how a Telegram `PeerFloodError`
 `AuthKeyDuplicatedError` is classified `HUMAN` rather than `STOP` because the fix is
 `crawler login`, but the operational effect is identical: both are in `DISARMING`.
 
-**3. `SUSPECT` is two rules, not one, because each is blind where the other fires.**
+**3. `SUSPECT` is three rules, not one, because each is blind where the others fire.**
 
 - **(a)** an envelope claimed `COVER_EXACT` over a non-empty interval and
   `ParseResult.found == 0`.
 - **(b)** zero items from a target that produced items in **each** of its last three
   runs.
+- **(c)** a run whose `runs.stop_reason` is a watermark stop at **scroll ≤ 2** with
+  `items_new == 0`.
 
-Either rolls back the cursor write and sets `runs.status='suspect'`. **Two consecutive
-suspect runs escalate to `HUMAN`.**
+Any of the three rolls back the cursor write and sets `runs.status='suspect'`. **Two
+consecutive suspect runs escalate to `HUMAN`.**
 
 Rule (a) fires on run **one** — it catches Facebook's empty-feed-with-200, a Reddit
 auth-error page and Telegram's silently-empty history immediately. Rule (b) catches
 what (a) structurally cannot see: a connector that honestly claims `COVER_OPAQUE`
 (Facebook always will) makes no interval claim, so (a) can never fire for it. But (b)
 is blind on a brand-new target and for three runs after a reparse resets the ledger.
-Hence both. This is the single most valuable rule in the system, because the failure it
+
+Rule (c) exists because (b) goes blind on the specific failure it is most needed for. If
+Facebook's pinned-badge selector rotates, the watermark stop rule trips on scroll one, every
+run returns **zero new items**, and after three such runs (b) has no "produced items in each
+of its last three runs" history left to compare against — the rule disqualifies itself by
+its own definition. (c) needs no history and no fill rate: a feed that claims it reached
+familiar ground before it has scrolled twice, while adding nothing, is not a quiet day. The
+Facebook connector contributes only an honest `stop_reason` and `scroll` in the last
+envelope's `meta`; the rule lives in core and applies to any connector with a behavioural
+stop rule.
+
+This trio is the single most valuable mechanism in the system, because the failure it
 catches *looks exactly like a quiet day* — the run "succeeds", the cursor advances, and
 every future run skips real content forever.
 
 ---
 
-## 11. Secrets
+## 11. The CLI surface — the only normative list
+
+**Every command spelling in this document set comes from this table.** No other document
+invents one; where one disagrees, this table is right. It exists because five documents
+independently invented `crawl` vs `sync`, `init-keys` vs `init-private`, `crawler add` vs
+`crawler targets add`, and `--spec` vs a positional spec — and because
+[./PLAN.md](./PLAN.md) M8's acceptance check ("every documented flag is wired") is only
+runnable against a list that exists.
+
+**Four spellings were picked deliberately, and the losers are recorded so they stay lost:**
+
+| Chosen | Rejected | Why |
+|---|---|---|
+| `crawler crawl` | `crawler sync` | "sync" implies two-way. There is no write path in this tool |
+| `crawler init-keys` | `crawler init-private` | it generates **two** Keychain items and only one of them belongs to `private.db`; the other is the identity pepper |
+| `crawler targets add <spec>` | `crawler add`, `--spec <spec>` | `Connector.resolve(self, spec: str, kind: str \| None = None)` takes **one** spec string. A positional argument is that signature; a pile of `--url`/`--kind`/`--slug` flags is a different one |
+| `vn.moonbase.crawler-social.*` | `crawler-social-*` | Keychain service names are runtime identifiers, not prose. One convention, reverse-DNS, matching the LaunchAgent label |
+
+### Setup and health
+
+| Command | Flags | Exit | Gated on |
+|---|---|---|---|
+| `crawler doctor` | `--secrets` walks the worktree for credentials that must never be committed; `--repair` offers `INSERT INTO items_fts(items_fts) VALUES('rebuild')` | 0 / 78 | — |
+| `crawler init-keys` | — | 0 / 78 | run once; refuses to overwrite an existing item without `--force` |
+| `crawler login --source X` | — | 0 / 78 | `Cap.NEEDS_HUMAN_LOGIN`. **Interactive only.** A scheduled job that reaches it exits 78 rather than blocking on stdin |
+| `crawler resume --source X` | — | 0 | clears `sources.state='stopped'` after a `STOP` or `HUMAN` |
+| `crawler capabilities` | `[--source X]` | 0 | renders each connector's `capabilities_note()` free text |
+
+### Targets
+
+| Command | Flags | Exit | Gated on |
+|---|---|---|---|
+| `crawler targets add <spec>` | `--slug`, `--kind`, `--ack-third-party`, `--retention-days N\|forever`, `--backfill 90d\|all`, `--force-tier X`, `--media download --mime T --max-bytes N`, `--priority N` | 0 / 78 | `--ack-third-party` and `--retention-days` are **required** for a conversation target and the command refuses without them; it also refuses when `fdesetup status` reports FileVault off |
+| `crawler targets list` | `--source X`, `--sensitive` | 0 | `--sensitive` lists every conversation target with row count, date range and last crawl |
+| `crawler telegram list-chats` | — | 0 | source-scoped. **Prints candidates and writes nothing.** There is no bulk-enrol command anywhere in this table, and the absence is the design |
+
+`<spec>` is one string the connector parses: `fb:https://facebook.com/vnexpress`,
+`fb:https://facebook.com/groups/123456789`, `tg:@somechannel`, `tg:-1001234567890`,
+`reddit:r/vietnam`, `x:@handle`. `resolve()` is pure — it never resolves a numeric id over
+the network, which is why `platform_container_id` must be derivable from the spec alone.
+
+### Collecting
+
+| Command | Flags | Exit | Gated on |
+|---|---|---|---|
+| `crawler crawl --source X --target T` | `--limit N` (**no durable cursor**, `runs.mode='limit'`), `--since 90d`, `--max-scrolls N` | 0 / 69 / 75 / 77 / 78 / 86 | `--since` requires `Cap.BACKFILL` **or** `Cap.BACKFILL_CAPPED`; refused for a `Cap.FILE_IMPORT`-only connector with a pointer to `import` |
+| `crawler tick` | `--lane gui,api`, `--fixture DIR`, `--db PATH` | same | the LaunchAgent entry point. `--fixture` runs the entire pipeline with no browser and no network |
+| `crawler backfill --source X --target T` | `--since DATE`, `--takeout` (Telegram) | same | supervised, **never scheduled**; `Cap.BACKFILL` |
+| `crawler import --source x --file PATH` | `--limit N` | 0 / 78 | `Cap.FILE_IMPORT`. `runs.mode='import'` |
+| `crawler capture --source X --target T` | `--limit N`, `--redact`, `--out DIR` | 0 | writes fixtures. **Fixtures are captured, never hand-copied** |
+
+### Reading and repair
+
+| Command | Flags | Exit | Notes |
+|---|---|---|---|
+| `crawler status` | `[--source X]` | 0 | reads **both** files. Last run per target, open `gaps`, month-to-date spend |
+| `crawler search <query>` | `--private`, `--limit N`, `--exact` | 0 | **`--private` opens `private.db` only.** There is no federated search |
+| `crawler explain <item-id>` | — | 0 | `first_seq` / `last_seq` back into the envelope store |
+| `crawler reparse --source X` | `--kind K`, `--dry-run` | 0 | **zero network.** Driven by `WHERE parser_version < (current)`, ordered by `seq` |
+| `crawler cursors` | `--rebuild` | 0 | re-derives every watermark from stored envelopes |
+
+### Governance — every destructive verb prints a plan first
+
+| Command | Flags | Exit | Notes |
+|---|---|---|---|
+| `crawler export --out PATH` | `--format jsonl`, `--include-tier joined`, `--include-private`, `--include-names` | 0 / 78 | default-deny by class. **`--include-private` is refused outright when stdin is not a TTY** — refused, not prompted. Conversation *envelopes* have no export flag at all |
+| `crawler purge` | `--dry-run` (**default**) / `--apply`, `--target T [--all]`, `--privacy C`, `--person P-xxxx`, `--before DATE`, `--older-than 90d` | 0 | writes a `redactions` row with `block_reingest=1` |
+| `crawler forget <target>` | — | 0 | a **distinct verb**: unenrol + delete + block re-ingest |
+| `crawler vacuum` | — | 0 | `secure_delete` sweep, `VACUUM`, `wal_checkpoint(TRUNCATE)`, and the honest APFS-snapshot notice |
+
+### Exit codes
+
+`0` ok · `69` transient · `75` rate-limited · `77` needs human · `78` config ·
+`86` blocked. `DISARMING = {77, 78, 86}`. Full taxonomy in §10.
+
+**M8's acceptance check reads this table**: every command above has a working `--help` and
+a test exercising its argument validation.
+
+---
+
+## 12. Secrets
 
 **macOS Keychain via `security(1)`, resolved `env → Keychain → LOUD failure`.** Never a
 silent fallback to a file: a gitignored `.env` is one `git add -A` from a commit and
@@ -1243,7 +1392,7 @@ than implying protection you do not have.
 
 ---
 
-## 12. Connector registration
+## 13. Connector registration
 
 A hardcoded dict of lazy import strings. Boring, greppable, type-checkable.
 
@@ -1297,7 +1446,7 @@ needing to run on a second machine.
 
 ---
 
-## 13. Testing without a network
+## 14. Testing without a network
 
 The contract already forces this. `parse()` is pure and consumes exactly the bytes
 core stored, so **a fixture is not a special test artifact — it is an `envelopes` row
@@ -1380,73 +1529,49 @@ an innocent selector tweak silently no longer populating a field.
 
 ---
 
-## 14. What exists at v1, and what is only specified
+## 15. What exists at v1, and what is only specified
 
 The frozen ruling is **the shapes are fixed today, the machinery arrives just in
 time.** The full DDL and the contract dataclasses are written now because they are
 cheap to write and expensive to migrate. Everything else waits for the connector that
-needs it. Milestones live in [./PLAN.md](./PLAN.md) §6; phase order and the trigger that
-unblocks each deferred item live in [./ROADMAP.md](./ROADMAP.md).
+needs it. Milestones live in [./PLAN.md](./PLAN.md) §6; the deferred list and the trigger
+that unblocks each item live in [./PLAN.md](./PLAN.md) §11.
 
 | Component | v1 (Facebook) | Arrives with |
 |---|---|---|
 | `contract.py`, full DDL, `Cap` enum | **built** | — |
 | `envelopes` + `envelope_fetches`, `commit_envelope`, cursors, runs, `field_stats` | **built** | — |
-| `Budget`, `Bucket`, verdicts, exit table, the SUSPECT pair | **built** | — |
+| `Budget`, `Bucket`, verdicts, exit table, the SUSPECT trio | **built** | — |
 | `gaps` table + coverage recording | **built** (Facebook always claims `OPAQUE`) | drained at Reddit |
 | `data/private.db` + SQLCipher + two-file router | schema only | **Telegram** |
 | `item_versions`, absence/tombstone sweep, retention, purge | schema only | **Telegram** |
 | zstd + trained dictionaries (`zdict`) | `codec` column only; **zlib at v1** | **Telegram** |
 | `usage_counters`, billed spend counter | schema only | **X (rest)** |
-| `spool/`, `Receiver`, the `receivers` LaunchAgent | **plist installed empty** | first push transport |
 | `Cap.FILE_IMPORT` | — | **X archive ZIP** |
 | media download (`media_mode='download'`) | per-target flag exists, defaults to `link` | on explicit request only |
-| `persons` / `author_person_links` | tables exist, **zero writers** | a manual link |
 | per-source detail tables | tables do not exist; the generated-column path is verified | never, so far |
+
+**Four things an earlier draft listed here that no longer exist anywhere**, so that nobody
+goes looking for them: `Cap.PUSH`, `core/spool.py`, `core/receivers.py` and the `receivers`
+LaunchAgent (cut — §8); `persons` and `author_person_links` (cut — their tripwire is
+ADR-0023, a written rule); `targets.identity_mode` (cut — it had no reader); and
+`connectors/facebook/stealth.py` (cut — §3). Each is a deferred row with a trigger in
+[./PLAN.md](./PLAN.md) §11, or a recorded decision in
+[./docs/DECISIONS.md](./docs/DECISIONS.md), not a gap.
 
 ---
 
-## 15. Verify before building
+## 16. Verify before building
 
-Nothing below is settled. Each item is either second-hand, contradicted between
-sources, or environment-dependent. **Do not upgrade any of these into a stated fact,
-and do not invent a number to fill the gap.** Per-source detail and citations live in
-[./docs/sources/](./docs/sources/).
+**The consolidated checklist lives in [./PLAN.md](./PLAN.md) §12** — every unverified or
+second-hand claim across all seven documents, in one place, each with how to check it, how
+long that takes, and what it blocks. It is one list on purpose: an earlier draft carried
+four overlapping ones and they immediately disagreed with each other about whether X's
+prices were verified.
 
-### Blocks a design decision
+This section keeps only the two things that are *architectural* rather than factual.
 
-| # | Claim | Status | How to settle it |
-|---|---|---|---|
-| V1 | A new Reddit OAuth app can be registered at all (self-service ended Nov 2025; manual review under the Responsible Builder Policy, stated ~7-day target) | **likely**, secondary sources only — `support.reddithelp.com` returned 403 to automated fetches | **Phase 0 / R0.** Submit the application on day one. It is free, and everything downstream of Reddit forks on the answer. |
-| V2 | SQLCipher's vendored build in `sqlcipher3` 0.6.2 has **FTS5** compiled in | **unverified** | `SELECT * FROM pragma_compile_options();` at M0. If absent, conversation search needs a separate index — not a blocker, since it is opt-in. |
-| V3 | Keychain ACLs (`-T <binary>`) meaningfully restrict a `uv run python` caller | **unverified** | Test with a second Python process. If they do not hold, the docs must say so rather than imply protection. |
-| V4 | X pay-per-usage actually unlocks full-archive search (`/2/tweets/search/all`) | **contradicted** — official docs say "Self-serve or Enterprise", a vendor blog says 7-day only | console.x.com, before enabling anything that needs it. Not blocking: the default (timelines + `since_id`) needs neither search endpoint. |
-| V5 | Zalo OA `listrecentchat` / `conversation` resolve at `/v3.0/` as third-party SDKs assume, or only at the documented `/v2.0/` | **unverified** | Test both against a live token. |
-
-### Changes a number, not the design
-
-| # | Claim | Status | How to settle it |
-|---|---|---|---|
-| V6 | Reddit free tier is ~100 QPM over a ~10-minute rolling window | **likely** — consistent across independent 2026 sources, never seen in Reddit's own words | Read live `X-Ratelimit-*` headers on the first authenticated request. The `respect_headers` feedback loop makes a wrong prior self-correcting. |
-| V7 | `/api/info?id=…` accepts 100 fullnames per call | **unverified** | One request. If lower, metric re-observation costs proportionally more (still small). |
-| V8 | X per-resource prices ($0.005/post read, $0.010/user read) and the monthly cap | **conflicted** — recon fetched docs.x.com and reports the price list verbatim; a parallel recon could not reach it and marks every figure unverified; official docs say 3M reads/month, vendor blogs say 2M | **console.x.com**, before the connector is enabled. This is the one connector where being wrong costs money. |
-| V9 | Whether X `expansions` bill as separate resources, and whether media rides free | **unverified** — there is no media line item, but absence of a line item is not an exemption | One request, then read the credit ledger. |
-| V10 | Telegram takeout's flood-limit multiplier (`wait_time=0.5` is a guess, not a budget) | **unverified** — the docs say only "some calls will have lower flood limits" | Instrument the first backfill and adjust. |
-| V11 | Telethon 1.44.0 runs clean on Python 3.13 (its `python_requires='>=3.5'` and 3.8-max classifiers are stale metadata) | **unverified** | Smoke-test on the actual project interpreter before pinning. |
-| V12 | Zalo OA rate limit — official appendix says a flat 4,000 req/min but is footered ©2023; trade sources say 100 (Tăng trưởng) / 2,000 (Toàn diện) req/min per tier | **contradicted** | Read `X-RateLimit-Limit` from a live response. |
-| V13 | Zalo OA token lifetimes (25h access / 3-month single-use refresh per the docs mirror; 1h access widely repeated third-hand) | **unverified** | Load-bearing for the crash-safe rotation design. Confirm first. |
-
-### Legal and policy, carried as-is
-
-| # | Claim | Status |
-|---|---|---|
-| V14 | Reddit's Data API Terms require dropping content deleted upstream **even when de-identified**, with a reported 48-hour guidance | **unverified** — primary pages unreachable (403/blocked). This forces `on_upstream_delete='follow'`, locked, for Reddit; read the terms first-hand before fixing the retention default in code. |
-| V15 | Telegram's API terms prohibit using or aggregating Telegram data to **train or fine-tune ML models** | **likely** — from search extracts of `core.telegram.org/api/terms`, not a direct fetch. A hard boundary if any downstream use involves an LLM. Surfaced in the export manifest so the constraint travels with the data. |
-| V16 | Vietnam: Decree 13/2023 was **repealed 2026-01-01**; the operative instruments are Law 91/2025/QH15 and Decree 356/2025/NĐ-CP | **verified** across DLA Piper, Tilleke, DFDL. Any document citing Decree 13 is citing a repealed rule. |
-| V17 | Whether the PDPL contains a purely-personal/household exemption | **unverified** at article level. **Design as though none applies** — the tool stores third parties' messages either way. |
-| V18 | `KeepAlive.NetworkState` | **verified locally** as documented *"no longer implemented"* in `man 5 launchd.plist` on macOS 26.5.2. Inert, not harmful; do not rely on it. See §8. |
-
-### Environment assertions (cheap, run them in `doctor`)
+### The environment assertions — cheap, and `doctor` runs them
 
 ```python
 if sqlite3.sqlite_version_info < (3, 45, 0):     # JSONB, ->>, STRICT, contentless_delete
@@ -1456,15 +1581,33 @@ if sqlite3.sqlite_version_info < (3, 45, 0):     # JSONB, ->>, STRICT, contentle
 
 A `uv`-managed interpreter bundles **its own** SQLite, which is not necessarily the one
 the system `sqlite3` CLI links. On this machine (macOS 26.5.2) the pyenv 3.13.13
-interpreter links SQLite 3.51.0 — verified — but that says nothing about what `uv`
-will provision. Assert it in `db.connect()` and in `doctor`, not in a comment.
+interpreter links SQLite 3.51.0 — verified, and the whole frozen DDL was executed against
+it — but that says nothing about what `uv` will provision. Assert it in `db.connect()` and
+in `doctor`, not in a comment. Same for the two behaviours the schema depends on:
+`local_day` as a `STORED` generated column, and FTS5 with `remove_diacritics 2`.
+
+### The one resolved conflict worth recording
+
+X's per-resource prices were marked `[verified]` in one document and `unverified` in three
+others, and this section previously recorded that disagreement as unresolved. **It is
+resolved.** Two independent recon passes fetched `docs.x.com/x-api/getting-started/pricing`
+on 2026-09-01 and agree on every figure, including the `$0.005` per Post read, the
+`3,000,000`-read monthly cap and the 24-hour UTC dedup window that picks the cron time. The
+published figures are `[verified]`; every document now says so.
+
+What stays true regardless: **`console.x.com` is the billing authority and docs lag.** That
+is why the spend cap is typed as a **dollar ceiling** at enable time rather than derived
+from a price this plan believes (§9), and why the dry run prints the price it read from the
+console next to its projection. A verified doc figure and a reconciled ledger are different
+things, and only the second one bills you.
 
 ---
 
-*Companion documents: [./PLAN.md](./PLAN.md) (scope, per-platform risk, the numbered
-milestone plan), [./docs/DECISIONS.md](./docs/DECISIONS.md) (why each of these is frozen,
-and what was rejected), [./docs/DATA-MODEL.md](./docs/DATA-MODEL.md) (the frozen DDL and
-its query plans), [./docs/GOVERNANCE.md](./docs/GOVERNANCE.md) (privacy classes,
-encryption, retention, export), [./ROADMAP.md](./ROADMAP.md) (phase order and the trigger
-that unblocks each deferred item), [./docs/sources/](./docs/sources/) (per-connector
-transports and the evidence behind them).*
+*Companion documents: [./README.md](./README.md) (what this repo is and the reading order),
+[./PLAN.md](./PLAN.md) (scope, per-platform risk, the numbered milestone plan, the deferred
+list with triggers, the verify checklist, the open questions),
+[./docs/DECISIONS.md](./docs/DECISIONS.md) (why each of these is frozen, and what was
+rejected), [./docs/DATA-MODEL.md](./docs/DATA-MODEL.md) (the frozen DDL — the only copy —
+and its query plans), [./docs/GOVERNANCE.md](./docs/GOVERNANCE.md) (privacy classes,
+encryption, retention, export), [./docs/sources/](./docs/sources/) (per-connector transports
+and the evidence behind them).*

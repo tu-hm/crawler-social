@@ -544,7 +544,7 @@ This is the one milestone that legitimately precedes a real row, because `local_
       integrity_check` returns ok after an insert/update/delete cycle
 
 **Done when:** `pytest` green; `sqlite3 data/social.db "SELECT count(*) FROM sqlite_master"`
-returns **78**; the re-fetch test proves the `envelopes`/`envelope_fetches` split actually
+returns **77**; the re-fetch test proves the `envelopes`/`envelope_fetches` split actually
 preserves "when did I last confirm this existed".
 
 #### M2 — Walking skeleton: the first real Facebook rows *(browser; needs profile age ≥ 3 days)*
@@ -842,7 +842,9 @@ Telegram second, not Reddit. Four reasons, in order of weight:
       `schema_versions` carries the divergence and `doctor` reports it as declared rather
       than as an error
 - [ ] Re-run the object-count verification with `sqlcipher3` for `private.db`, so the
-      78/78 claim in [./docs/DATA-MODEL.md](./docs/DATA-MODEL.md) §3 means what it says
+      77/77 claim in [./docs/DATA-MODEL.md](./docs/DATA-MODEL.md) §3 means what it says —
+      the count in that document was produced with plain `sqlite3` on both files and
+      therefore never exercised SQLCipher at all
 - [ ] The resolved `GovernanceProfile` routes each envelope and each item to a file
       **before** any write. Conversation envelopes go to `private.db` too
 - [ ] `propose_privacy()` in the contract; core resolves; config may only raise;

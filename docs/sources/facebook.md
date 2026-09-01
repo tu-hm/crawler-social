@@ -4,7 +4,7 @@
 **ToS class:** `prohibited` — automated collection is against Meta's Terms even for
 content your account can already see. The currency of failure is your account, not a
 lawsuit. See [../../PLAN.md](../../PLAN.md) §3.
-**Ships:** first. See [../../PLAN.md](../../PLAN.md) §6 M3–M11.
+**Ships:** first. See [../../PLAN.md](../../PLAN.md) §6 M2–M10.
 
 Facebook is the only source in this project where browser automation is the right answer,
 and it is worth being precise about *why*, because the reason does not generalize:
@@ -20,7 +20,7 @@ and the schema in [../DATA-MODEL.md](../DATA-MODEL.md).
 > project forbade any request to `facebook.com`. Every DOM selector, GraphQL operation
 > name and page-marker string below is therefore a **starting hypothesis derived from
 > third-party reporting and from how these pages are known to be built** — not a verified
-> observation. They exist so M4 has something concrete to confirm or discard in an hour
+> observation. They exist so M2 has something concrete to confirm or discard in an hour
 > rather than a day. The library, protocol and platform-lifecycle facts *are* verified,
 > and are labelled as such. Do not let the two categories blur.
 
@@ -53,11 +53,11 @@ Deliberately **not** set, and each absence is load-bearing:
 | Flag | Why not |
 |---|---|
 | `EXACT_CURSOR` | There is no cursor. A scroll position is not addressable. Resume always re-reads an overlap |
-| `DELETE_EVENTS` | Facebook tells you nothing about deletions, so the absence sweep is mandatory |
+| `DELETE_EVENTS` | Facebook reports no deletion events — but note that the absence sweep cannot help either, because an `opaque` coverage claim yields no absence evidence. **Facebook upstream deletes are undetectable, permanently** (§9), so `rescan_window_days = 0` |
 | `PARALLEL_TARGETS` | One browser, strictly serial, deliberately slow |
 | `BILLED` | Costs time and account risk, not money |
 | `CONVERSATIONS` | Messenger is out of scope at v1. If it is ever added, this flag flips and everything in [../GOVERNANCE.md](../GOVERNANCE.md) engages |
-| `PUSH` / `FILE_IMPORT` | No receiver, no archive importer at v1. The Facebook data-export ZIP is a plausible future `FILE_IMPORT` target and would reuse the shape M15 builds for X |
+| `FILE_IMPORT` | No archive importer at v1. The Facebook data-export ZIP is a plausible future `FILE_IMPORT` target and would reuse the shape M14 builds for X. *(`Cap.PUSH` is not in this list because it does not exist — see ARCHITECTURE.md §6.)* |
 
 ### `capabilities_note()`
 
@@ -83,7 +83,7 @@ facebook: headful Chrome on your own session.
 |---|---|---|---|
 | `fb.feed_html` | `text/html` | Every scroll step, unconditionally, from day one | `opaque`, `note="scroll_unmount"` |
 | `fb.post_html` | `text/html` | A second navigation to a post permalink, for comments or a truncated body | `opaque`, `note="post_detail"` |
-| `fb.graphql.feed` | `application/json` | Only if M4 says response-body capture works. Emitted **alongside** `fb.feed_html`, never instead of it | `opaque`, `note="graphql_observed"` |
+| `fb.graphql.feed` | `application/json` | Only if M2 says response-body capture works. Emitted **alongside** `fb.feed_html`, never instead of it | `opaque`, `note="graphql_observed"` |
 | `fb.wall_html` | `text/html` | Whenever a wall is detected — the wall document is stored so the classifier can be improved later against real evidence | `opaque`, `note="wall"` |
 
 **Coverage is `opaque`, forever, on every Facebook envelope.** This is a first-class
@@ -166,7 +166,7 @@ Two objections, and the second is the disqualifier:
    than no spoof, and §4 explains why that principle governs every stealth decision in this
    connector.
 
-**A third reason that only applies if M4 succeeds:** `www` is the surface that fires the
+**A third reason that only applies if M2 succeeds:** `www` is the surface that fires the
 GraphQL queries you want to capture. Downgrading to a server-rendered surface to make DOM
 parsing easier would throw away the richer envelope kind. The correct trade is the other
 way round.
@@ -179,9 +179,9 @@ separate host.
 
 ---
 
-## 3. M4 — the extraction-strategy spike
+## 3. M2 — the extraction-strategy spike
 
-**This is a parse-quality gate, not a project go/no-go gate.** The original plan made M3 a
+**This is a parse-quality gate, not a project go/no-go gate.** The original plan made M2 a
 project-wide gate that every later milestone hung off, and choosing wrong there would have
 cost every post collected before you noticed. The frozen rule replaces it:
 
@@ -272,6 +272,15 @@ Half a day, in this order. Stop as soon as B produces a real body.
    profile; a brand-new profile hitting a group feed with an automation stack attached is
    the highest-risk single action in the whole project.
 
+   **"Warm" is a number now, not a judgement call.** The clock starts at M0/P0 —
+   `crawler login`, then use that profile by hand like an ordinary browser. `crawler doctor`
+   reports profile age from the user-data-dir mtime and `crawl` **refuses** below the
+   threshold with an actionable message: **≥ 3 days** before a public Page, **≥ 14 days**
+   before a group. Run this spike against a **Page** first, and take the group feed (step 5)
+   only once the 14-day threshold is met. An earlier draft asserted the principle and gave
+   no number, which left the whole §4 pacing argument undercut at the exact moment it
+   matters most.
+
 3. **Register the handler *before* navigation**, then navigate to one Page feed. Log every
    XHR response URL and `request_id` you see. You are looking for POSTs to a GraphQL
    endpoint. Write down what you actually observe — the `fb_api_req_friendly_name` form
@@ -299,8 +308,8 @@ Half a day, in this order. Stop as soon as B produces a real body.
    | Private group feed | The case you care about; different query, different DOM |
    | Post with media | Album grouping, link cards, video posts |
    | Post with >100 comments | Comment pagination and the "View more comments" path |
-   | A checkpoint / block wall | M8's classifier has nothing to test against without it |
-   | **An empty feed returning HTTP 200** | The failure that looks like success. If you cannot capture one naturally, synthesize it — M8 and the SUSPECT rule both need it |
+   | A checkpoint / block wall | M7's classifier has nothing to test against without it |
+   | **An empty feed returning HTTP 200** | The failure that looks like success. If you cannot capture one naturally, synthesize it — M7 and the SUSPECT rule both need it |
 
    Each fixture gets a `meta.json` sidecar reproducing the `Envelope` non-body fields
    (`kind`, `captured_at`, `content_type`, `cursor_after`, `coverage`, `meta`). Capture via
@@ -446,7 +455,7 @@ has nothing to do with Facebook at all.
 
 ## 6. Wall and challenge taxonomy
 
-Port `~/dev/crawler-pages/webcrawler/challenge.py` as the pattern. Take the whole design,
+Port `~/dev/crawler-pages/webcrawler/challenge.py` into `connectors/facebook/walls.py` as the pattern. Take the whole design,
 not just the idea:
 
 - The frozen `Challenge` dataclass with `kind` / `vendor` / `detail`, the `human_clearable`
@@ -479,7 +488,7 @@ connector is strictly serial with one browser, so the handoff is just `crawler l
 | **Account disabled** | "your account has been disabled" wording, small document | **`STOP`** | 86 | Same |
 | **Temporarily blocked** ("You're Temporarily Blocked", "please try again later") | Wall wording in a small document, or an interstitial that replaces the feed | `WAIT` | 75 | **Policy** backoff 15m → 1h → 4h → STOP. Facebook supplies no `Retry-After`, so unlike Telegram there is no server-supplied duration to obey |
 | **Not a member / no access** ("You must be a member", a Join button where the feed should be) | Group URL resolves, feed container absent, join affordance present | `DROP` | 0 | `containers.access_state='no_access'`. **Absence sweep skipped for that container** — this is the guard that stops one lost group from tombstoning 4,000 posts |
-| **Content unavailable** (single post) | Post permalink returns "This content isn't available right now" | `DROP` for that item only | 0 | Contributes an `absence_strike`; does not fail the run |
+| **Content unavailable** (single post) | Post permalink returns "This content isn't available right now" | `DROP` for that item only | 0 | Does not fail the run. **This is the one Facebook signal that is genuine absence evidence**, because a permalink either resolves or does not — unlike a feed re-scan, which claims `opaque` and therefore contributes nothing (§9). Nothing at v1 navigates permalinks for this purpose; it is what a future bounded delete-check would be built on |
 | **Group went private / you were removed** | Indistinguishable from a block at the HTTP level | `DROP` + `access_state` change | 0 | This is why `access_state` exists as a separate axis from `runs.status`. Getting these two confused is how you chase ghosts |
 | **Empty feed, HTTP 200** | **Not detected by the connector at all** | `SUSPECT` | — | **Core-detected.** See below |
 
@@ -566,10 +575,18 @@ Four properties this shape buys, all of which matter:
    costs at most one scroll step.
 3. **`--limit N` and the 25-minute deadline both work**, because `budget.exhausted()` is
    checked every step rather than after the fact.
-4. **Identical scroll steps cost one envelope row, not many.** Two steps producing byte-identical
-   output collapse on `envelopes.sha256` while *both* append an `envelope_fetches` row.
-   That split is why "when did I last confirm this post existed" survives deduplication —
-   see [../DATA-MODEL.md](../DATA-MODEL.md).
+4. **Facebook envelope bodies are per-step deltas, so `sha256` dedupe rarely fires here** —
+   and this is the one place to be honest about it rather than repeat the generic argument.
+   `fresh` is the set of posts *not yet seen in this run*, so within a run the bodies are
+   disjoint by construction, and across runs a day apart the fresh sets, their ordering and
+   their embedded tracking params all differ. A byte-identical `fb.feed_html` is essentially
+   impossible.
+
+   The `envelopes` / `envelope_fetches` split is still correct and still valuable — it is
+   just Reddit's `reddit.info` that exercises it, not this connector (see
+   [../DATA-MODEL.md](../DATA-MODEL.md) §7). **For Facebook, "when did I last confirm this
+   post existed" comes from `items.last_seen`, bumped by the upsert, plus
+   `items.absence_streak` — not from `envelope_fetches`.**
 
 ### 7.2 An honest caveat about "raw" HTML
 
@@ -583,7 +600,7 @@ guarantee is genuinely weaker here than for a JSON API:
   `1.2K` and the exact number only ever existed in a GraphQL response you did not capture,
   no future parser recovers it.
 
-This is precisely why `fb.graphql.feed` is worth capturing alongside if M4 permits, and why
+This is precisely why `fb.graphql.feed` is worth capturing alongside if M2 permits, and why
 `media_mode` defaults to `link` with an explicit note that the replay guarantee covers
 **structured content only** — a Facebook CDN URL is a dead pointer within days.
 
@@ -591,7 +608,7 @@ This is precisely why `fb.graphql.feed` is worth capturing alongside if M4 permi
 
 | Mechanic | Rule |
 |---|---|
-| **Sort order** | Group feeds get `?sorting_setting=CHRONOLOGICAL`. *(Community-established, never documented by Meta; the "Recent posts" affordance is hidden on most groups, which is why people type it by hand. Re-confirm at M4 — if it stops working, the watermark's stop rule degrades but does not break, because it counts already-seen posts rather than trusting order.)* |
+| **Sort order** | Group feeds get `?sorting_setting=CHRONOLOGICAL`. *(Community-established, never documented by Meta; the "Recent posts" affordance is hidden on most groups, which is why people type it by hand. Re-confirm at M2 — if it stops working, the watermark's stop rule degrades but does not break, because it counts already-seen posts rather than trusting order.)* |
 | **In-flight dedupe** | By `platform_item_id` within the run, before the envelope is emitted. Cross-run dedupe is the DB's job via `UNIQUE (container_id, platform_item_id)` |
 | **"See more"** | Expand every truncated body **before** capturing that post's subtree. A truncated body captured raw is a permanently truncated body, and no reparse recovers it — this is the one place where a fetch-time mistake defeats raw-first |
 | **Comments** | A **second navigation** to the post permalink, emitted as a separate `fb.post_html` envelope. `parse()` never fetches. This is the purity tax, paid deliberately: six months of re-parseable comment HTML is worth the browser minutes |
@@ -604,7 +621,7 @@ This is precisely why `fb.graphql.feed` is worth capturing alongside if M4 permi
 
 ## 8. Per-field extraction
 
-**Every selector and path in this table is a hypothesis to confirm at M4 against your own
+**Every selector and path in this table is a hypothesis to confirm at M2 against your own
 fixtures.** They are here so the confirmation takes an hour rather than a day. The
 *structure* of the table — a documented fallback chain per field and an explicit failure
 mode — is the part that is frozen.
@@ -613,7 +630,7 @@ The governing rule: **a missing field returns `None` and never raises.** A parse
 throws on one malformed post loses the whole envelope; a parser that returns `None` loses
 one field and the canary tells you about it (§10).
 
-| Field | Preferred (GraphQL, if M4 succeeds) | DOM fallback chain | Failure mode if all fall through |
+| Field | Preferred (GraphQL, if M2 succeeds) | DOM fallback chain | Failure mode if all fall through |
 |---|---|---|---|
 | `platform_item_id` | post node id / `post_id` | 1. `story_fbid=` in a permalink anchor · 2. `/posts/<id>` path segment · 3. `/permalink/<id>/` · 4. **last resort** `sha256(author_uid + text[:200] + local_day)` | The last-resort key is stable across re-crawls of the *same* content but changes if the text is edited — an edit then looks like a new post. Record which strategy produced the key in `extra.id_strategy` so this is diagnosable rather than mysterious |
 | `permalink` | permalink field | 1. timestamp anchor `href` · 2. any `a[href*="story_fbid"]` · 3. any `a[href*="/posts/"]` | `None`. Strip `?__cft__` and other tracking params before storing, or every re-crawl looks like a changed permalink |
@@ -622,8 +639,8 @@ one field and the canary tells you about it (§10).
 | `published_at` | exact unix `creation_time` | 1. timestamp anchor `aria-label` (carries an absolute date) · 2. `title` attribute on the timestamp element · 3. parse the relative text ("3 h", "Yesterday", "12 August") | **The most commonly silently-wrong field in the project.** Never write an exact-looking integer for a relative string |
 | `published_prec` | `exact` | `exact` from an absolute date; `minute`/`hour`/`day` from a relative string; `relative` when you have only a bucket; `unknown` when nothing parsed | This column exists so a downstream query can tell a real timestamp from a guess. Setting it dishonestly is worse than leaving `published_at` NULL |
 | `text` | message text | 1. the post message container after "See more" expansion · 2. concatenated text nodes of the message subtree | `None`. **Do not** fall back to the whole article's text — that sweeps in the author name, timestamp and reaction labels and silently poisons FTS |
-| `is_pinned` | pinned flag | Pinned badge / "Pinned post" label in the post header | Default `0`. A false negative here breaks the watermark stop rule (§9), so this is worth getting right |
-| `is_sponsored` | sponsored flag | "Sponsored" label in the header | Default `0` |
+| `is_pinned` | pinned flag | Pinned badge / "Pinned post" label in the post header | **`None`, not `False`.** Tri-state: `False` **only** when the parser positively observed the header without the badge; `None` when the selector matched nothing at all. A false negative here breaks the watermark stop rule (§9) *and* blinds the canary (§10), which is why the distinction is structural rather than stylistic |
+| `is_sponsored` | sponsored flag | "Sponsored" label in the header | **`None`** when the header did not parse; `False` when it did and there was no label. Same reason |
 | `reactions.total` | exact integer | Reaction summary text, `aria-label` on the reaction bar | **Rounded above 1k in the UI** (`1.2K` → 1200). Always `MetricDraft(approximate=True)` when parsed from the DOM; `approximate=False` only from a GraphQL integer |
 | `reactions.<type>` | per-type counts | Reaction bar `aria-label`, if it enumerates | Usually absent from the DOM. Emit only what you actually observed; never distribute a total across types |
 | `comments` count | integer | "N comments" text | Same rounding rule. Also **not** the same as the number of comments you can actually reach |
@@ -632,7 +649,7 @@ one field and the canary tells you about it (§10).
 | media `kind` | attachment typename | Element type + presence of a play affordance | `file` as the honest fallback, not a guess between `image` and `video` |
 | comment `platform_item_id` | comment node id | `comment_id=` in the comment permalink | Fall back to `sha256(post_id + author_uid + text[:200])`. Same edit caveat as posts |
 | comment `parent_ref` | parent comment id | `reply_comment_id=` in the permalink, or nesting depth in the DOM | **Always write `parent_ref` even when you cannot resolve it to an id.** Facebook delivers replies whose parents are collapsed behind "View more replies", and an unresolvable ref is exactly what the parent-repair pass exists for |
-| `more_remaining` | remaining count | The "View N more comments" affordance's number | Default `0` — but **`0` must mean "the tree is complete"**, never "I did not look". If comments were not fetched at all, the item simply has no comment children and `more_remaining` stays 0; if they were fetched and truncated, record the remainder. A partial tree that says it is partial is a correct result; a silently truncated one is a bug |
+| `more_remaining` | remaining count | The "View N more comments" affordance's number | **`None` when comments were not fetched at all**; `0` only when they were fetched and the tree is complete; the remainder when they were fetched and truncated. The tri-state is what stops `0` meaning both "complete" and "I did not look" — a partial tree that says it is partial is a correct result; a silently truncated one is a bug, and an unexamined one claiming completeness is worse than either |
 
 **Two general rules that apply to every row:**
 
@@ -700,8 +717,12 @@ recency, and which are also *not* what the watermark is tracking.
 This makes `is_pinned` detection load-bearing rather than cosmetic. If a DOM rotation
 breaks the pinned badge selector, the failure is not a missing column — it is a crawler
 that silently stops collecting. **The canary must therefore track `is_pinned` fill rate
-specifically**, and this is the concrete example of why the canary is a milestone rather
-than a nice-to-have.
+specifically** — and that is only possible because `is_pinned` is **tri-state** in
+`ItemDraft` (`bool | None`, ARCHITECTURE §5). On a `bool = False` default its fill rate is
+structurally 100% and the alarm can never sound, which would have made the canary's own
+headline justification the one field it could not watch. Core's SUSPECT rule (c) — a
+watermark stop at scroll ≤ 2 with zero new items — is the second, fill-rate-independent
+guard on exactly this failure.
 
 ### Guard 3 — the overlap is not optional
 
@@ -718,8 +739,26 @@ Stated plainly, because these are permanent properties and not bugs to fix later
 - **It cannot detect edits.** A post whose text changed after you first saw it is
   already-seen and will not be re-read. Edits are recovered only when the post happens to
   fall inside a re-scan window; when they are, `item_versions` records them.
-- **It cannot detect deletions.** That is the absence sweep's job, gated on
-  `containers.access_state='ok'` **and** `runs.status='ok'`, at 3 strikes for `broadcast`.
+- **It cannot detect deletions — and neither can anything else in this connector.** This is
+  the honest version, and an earlier draft got it wrong by handing the job to the absence
+  sweep. The sweep only counts absence **inside a positively-covered range**
+  ([../GOVERNANCE.md](../GOVERNANCE.md) §8.1 requirement 3), and Facebook claims `opaque`
+  coverage on every envelope it will ever emit. So a feed re-scan produces **zero absence
+  evidence by construction** and no Facebook item can ever accumulate an `absence_streak`
+  from one.
+
+  Therefore **`rescan_window_days = 0` for Facebook** and upstream deletes are simply not
+  detected. A deleted post stays `visible` in your archive forever. That is a permanent
+  property of an opaque transport, not a gap to close, and saying so costs nothing while
+  pretending otherwise would spend the scarcest and most dangerous budget in the project —
+  200 posts, 25 minutes, no feedback signal, the account as the failure currency —
+  re-scrolling old posts for a signal the design discards on arrival.
+  [./x.md](./x.md) §3.8 reaches the same conclusion for the same class of reason.
+
+  *(If per-post deletion detection is ever wanted for Facebook, it is a different feature: a
+  bounded re-navigation to individual permalinks, where "This content isn't available right
+  now" genuinely is absence evidence — §6 — with its own item budget. Spec it separately.
+  Do not conflate it with a feed re-scan; only one of the two works.)*
 - **It cannot express a gap.** Coverage is `opaque`, so `gaps` will never carry a Facebook
   row. If you go away for two weeks and the feed moved more than a session can scroll, the
   middle is simply missing and the tool cannot tell you so. This is the honest cost of the
@@ -739,7 +778,9 @@ you go before noticing** — and the default answer, with no canary, is weeks, d
 from empty columns during analysis.
 
 The mechanism is `field_stats(run_id, field, seen, filled)`, written by core from
-`ParseResult.diagnostics` on every run:
+**`ParseResult.field_stats`** — `dict[str, tuple[int, int]]`, field → `(seen, filled)` — on
+every run. Not from `diagnostics`, which is free text for a human reading a run report and
+cannot carry a triple:
 
 ```sql
 -- fill rate for this run, per field
@@ -785,9 +826,9 @@ cries wolf is a canary you disable.
 2. **Recovery is a reparse, not a re-crawl.** When the canary fires: fix the selector, bump
    `parser_version`, run `crawler reparse --source facebook`, and the stored envelopes
    re-populate every affected row back to the beginning. **This is the entire reason the
-   project is raw-first**, and it is worth rehearsing once at M7 before you need it under
+   project is raw-first**, and it is worth rehearsing once at M6 before you need it under
    pressure. `projection A/B diffing` — rebuild into a shadow table, diff per-field fill
-   rates, then promote or discard — is named in the deferred list with the second parser
+   rates, then promote or discard — is deferred in [../../PLAN.md](../../PLAN.md) §11 with the second parser
    rewrite as its trigger, at which point it converts the canary from an alarm that fires
    three weeks late into a pre-flight check on your own fix.
 
@@ -797,7 +838,7 @@ cries wolf is a canary you disable.
 
 | Tier | What | Needs |
 |---|---|---|
-| `test_parse_*` | Table-driven over the M4 fixtures, in the style of `crawler-pages/tests/test_challenge.py`. Golden fixtures assert a full field set; a deliberately mangled fixture must yield `None`s, never a traceback | Nothing |
+| `test_parse_*` | Table-driven over the M2 fixtures, in the style of `crawler-pages/tests/test_challenge.py`. Golden fixtures assert a full field set; a deliberately mangled fixture must yield `None`s, never a traceback | Nothing |
 | `test_walls` | `detect()` over every saved wall document, asserting kind and verdict | Nothing |
 | `test_parse_needs_no_secrets` | Construct the connector with `secrets={}`, parse every fixture | Nothing. **This is the enforcement mechanism for parse purity**, not a nicety |
 | `test_no_selenium_after_reparse` | `uv sync --group core --group facebook`, full reparse, assert `'selenium' not in sys.modules` | Nothing |
@@ -818,11 +859,16 @@ by analogy with Facebook.
 
 | Claim | Status | Verify at |
 |---|---|---|
-| SeleniumBase CDP Mode yields decodable Facebook GraphQL response bodies | The API is **verified** from the SeleniumBase repo; whether it works against Facebook's specific flow, timing and body encoding is exactly what the spike tests | M4 |
-| Whether `get_response_body` returns those bodies base64-encoded and/or compressed | Unverified. The maintainer states byte-level decompression is out of SeleniumBase's scope, so this is the most likely way candidate B fails in practice | M4 |
-| GraphQL operation names (`GroupsCometFeedRegularStoriesPaginationQuery` and friends) | Third-party reporting only. **Record what you actually observe; do not trust this document** | M4 |
-| `?sorting_setting=CHRONOLOGICAL` still sorting group feeds | Community-established, never documented by Meta | M4/M5 |
-| Every DOM selector in §8 | **All unverified** — no request to facebook.com was made during planning | M4/M6 |
+| SeleniumBase CDP Mode yields decodable Facebook GraphQL response bodies | The API is **verified** from the SeleniumBase repo; whether it works against Facebook's specific flow, timing and body encoding is exactly what the spike tests | M2 |
+| Whether `get_response_body` returns those bodies base64-encoded and/or compressed | Unverified. The maintainer states byte-level decompression is out of SeleniumBase's scope, so this is the most likely way candidate B fails in practice | M2 |
+| GraphQL operation names (`GroupsCometFeedRegularStoriesPaginationQuery` and friends) | Third-party reporting only. **Record what you actually observe; do not trust this document** | M2 |
+| `?sorting_setting=CHRONOLOGICAL` still sorting group feeds | Community-established, never documented by Meta | M2/M5 |
+| Every DOM selector in §8 | **All unverified** — no request to facebook.com was made during planning | M2/M4 |
 | Whether `m.facebook.com` server-renders group feeds | Unverified, and rejected on fingerprint grounds regardless (§2) | Only if §2 is ever re-opened |
 | Meta's exact ToS clause on automated collection | Quoted second-hand; the prohibition itself is not in doubt | Before you decide how much account risk you accept |
 | Whether `mbasic` retains any residual function | Retired December 2024. Treat as gone | Not worth checking |
+| **Profile is warm enough to drive** | Not a fact — a policy, enforced. `crawler doctor` reports profile age from the user-data-dir mtime; `crawl` refuses below the threshold | **≥ 3 days** before M2 (a Page); **≥ 14 days** before M5 (a group). The clock starts at M0/P0 |
+
+Every row above is also in the consolidated checklist,
+[../../PLAN.md](../../PLAN.md) §12 — that is the list to work from; this one carries the
+Facebook-specific consequence of each answer.
