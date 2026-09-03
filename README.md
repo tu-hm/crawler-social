@@ -1,13 +1,27 @@
 # crawler-social
 
-**A design, not an implementation.** There is no code in this repository and there is not
-meant to be yet — seven Markdown documents and a `.gitignore`. Everything here is frozen as
-of **2026-09-01** and is meant to be built against, argued with, and edited before anyone
-types `uv init`.
+> **Start with [SIMPLE_PLAN.md](./SIMPLE_PLAN.md).** It defines the intentionally small
+> first version: one public Facebook Page, one SQLite database, raw HTML, five parsed
+> fields, and two CLI commands. The larger documents below are reference material for
+> later expansion, not prerequisites for starting implementation. The active v1 supports
+> both macOS and desktop Linux; follow the ordered files in
+> [plans/v1/](./plans/v1/README.md).
+
+**Current status: planning only; no application code has been written.** The detailed
+documents below capture the larger, originally macOS-oriented multi-source design frozen on
+**2026-09-01**. Keep them as reference, but implement the smaller cross-platform v1 first
+and only bring decisions forward when the working product actually needs them.
 
 ---
 
-## What is being designed
+## Active v1
+
+Build one public Facebook Page crawler by following
+[plans/v1/00-environment.md](./plans/v1/00-environment.md), then continue in numeric order.
+Do not apply for other platform credentials, design private storage, or install a scheduler
+for this version.
+
+## Legacy multi-source design
 
 A personal ingestion tool that pulls one person's social and messaging activity into SQLite
 and **keeps the original transport bytes**, so that when Facebook rotates its DOM in month
@@ -39,7 +53,7 @@ forward-only, and there is deliberately no bulk-enrol command anywhere in the CL
 
 ---
 
-## The documents, and the order to read them
+## Legacy reference documents
 
 | # | Document | What it settles | Lines |
 |---|---|---|---|
@@ -51,10 +65,9 @@ forward-only, and there is deliberately no bulk-enrol command anywhere in the CL
 | 6 | [docs/DECISIONS.md](./docs/DECISIONS.md) | 63 ADRs: the full argument behind every frozen decision, including what was rejected and what would have to change to reopen it | 1,753 |
 | 7 | [docs/sources/](./docs/sources/) | One document per connector: [facebook](./docs/sources/facebook.md) · [telegram](./docs/sources/telegram.md) · [reddit](./docs/sources/reddit.md) · [x](./docs/sources/x.md) · [zalo](./docs/sources/zalo.md) | 3,824 |
 
-**Read 1 → 2 → 3 → 4.** Read GOVERNANCE before you write a line of the Telegram connector,
-not after. DECISIONS is a reference you go to when you want to reopen something — read the
-"Rejected" paragraph before you argue. The source documents are reference too; read the one
-for the connector you are building, when you build it.
+Do not read these documents before building v1. When a verified v1 is ready to expand, read
+PLAN, ARCHITECTURE, and DATA-MODEL in that order. Read GOVERNANCE before adding private
+data. DECISIONS and the source documents remain references for the feature being added.
 
 **Three boundaries, so you never read the same thing twice.**
 
@@ -67,7 +80,7 @@ for the connector you are building, when you build it.
 
 ---
 
-## Status
+## Legacy design status
 
 **Planning complete. No code written. Nothing has been run against any platform.**
 
@@ -91,7 +104,7 @@ for the connector you are building, when you build it.
 
 ---
 
-## What to do next
+## Legacy next actions — deferred until after v1
 
 **Four things on day one, before any code.** Each has a multi-day latency you do not control,
 each is free, and each changes the plan if it comes back wrong. They are M0 in

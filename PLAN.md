@@ -1,12 +1,20 @@
 # crawler-social — build plan
 
+> **Legacy expansion plan.** Do not implement this document from top to bottom. The active,
+> cross-platform v1 is [SIMPLE_PLAN.md](./SIMPLE_PLAN.md), with executable steps in
+> [plans/v1/](./plans/v1/README.md). This older design is retained for later multi-source
+> work and contains macOS-specific assumptions (Keychain, FileVault, and launchd) that are
+> not requirements for v1. Linux equivalents must be designed and verified before any of
+> those later features are promoted into the active plan.
+
 A personal ingestion tool that pulls your social and messaging activity into SQLite and
 keeps the original payload, so you can re-parse history later without going back to the
 platform. One core, several connectors. Facebook is connector #1; Telegram is #2; Reddit
 and X follow; Zalo is deferred with its trigger written down.
 
-Status: **planning only — no code written yet.** This document is the build order.
-Everything under `docs/` is the frozen design it builds against.
+Status: **planning only — no code written yet.** This document records the legacy expansion
+order; it is not the active v1 build order. Everything under `docs/` is reference material
+for that later design.
 
 The single most important thing to understand before reading further: **this tool is not
 a browser automation project.** Browser automation is the correct transport for exactly
