@@ -2622,6 +2622,42 @@ Eleven statements. If one of them stops being true, something is wrong.
 
 ---
 
+## 16. The v2 web server read path
+
+*Added 2026-09-05 with `plans/v2/`. The four v1 tables are unchanged; this section
+records what the local web viewer reads and the only schema the v2 work added.*
+
+The server (`crawler_social/server/`) is a **reader** over the same `social.db` the
+crawler writes. Each request opens the file with `file:...?mode=ro` and
+`PRAGMA query_only = ON` and closes it before responding, so the server cannot
+create, migrate, or write anything — the schema stays owned by `db.py`/`schema.py`
+at crawl time. The viewer reads exactly four tables:
+
+| Table | Read by | Purpose in the UI |
+| --- | --- | --- |
+| `posts` | `/posts`, `/posts/{id}`, home health panel, CSV export | listing, filters, detail, `first_seen`-based counts |
+| `snapshots` | `/snapshots`, detail/source/reparse, run pages | capture metadata; the `html` blob only on the explicit raw/source/download routes |
+| `runs` | `/runs`, `/runs/{id}`, header and health panels | status, duration, error |
+| `state` | `/state` | the crawl watermark, exactly as the next crawl will use it |
+
+The only schema the v2 work added is four covering indexes, created by the writer
+in `schema.py` — never by the server — so a `0o444` database file (the setup of
+the read-only route sweep in `tests/test_server_security.py`) is fully servable:
+
+- `idx_posts_page_url` — the `page_url` filter;
+- `idx_posts_sort` — `COALESCE(published_at, last_seen)` for newest/oldest ordering;
+- `idx_snapshots_run` — run → snapshots;
+- `idx_snapshots_page` — the page filter.
+
+Two read-path properties are load-bearing and tested. `PRAGMA integrity_check`
+returns `ok` on the fixture end-to-end database that `tests/test_smoke_routes.py`
+writes through `db.py` and then serves. And run yield is **approximate by
+construction**: `posts` carries no run foreign key, so `/runs/{id}` shows posts
+whose `first_seen` falls inside the run's window and labels them "approximate"
+in the UI rather than implying a precision the schema does not have.
+
+---
+
 *Every SQL statement, query plan and result in this document was executed against SQLite
 3.51.0 on 2026-09-01. Confidence labels on platform facts are carried forward from recon
 unchanged; see §14.*

@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Overview — crawler-social{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Overview</h1>
+</div>
+
+{% if not db_present or empty %}
+  {% include "partials/empty_state.html" %}
+{% endif %}
+
+{% if db_present %}
+<section class="cards">
+  <div class="card">
+    <div class="card-num">{{ summary.total_posts }}</div>
+    <div class="card-label">posts stored</div>
+  </div>
+  <div class="card">
+    <div class="card-num">{{ summary.total_snapshots }}</div>
+    <div class="card-label">snapshots captured</div>
+  </div>
+  <div class="card">
+    <div class="card-num">{{ summary.total_runs }}</div>
+    <div class="card-label">crawl runs</div>
+  </div>
+  <div class="card">
+    <div class="card-num">{{ db_size_bytes | bytes }}</div>
+    <div class="card-label">database on disk</div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Health</h2>
+  <dl class="facts">
+    <dt>Last run</dt>
+    <dd>
+      {% if summary.last_run %}
+        <span class="badge badge-{{ summary.last_run.status }}">{{ summary.last_run.status }}</span>
+        started {{ summary.last_run.started_at }}
+        {% if last_run_age %}<span class="secondary">({{ last_run_age }})</span>{% endif %}
+      {% else %}
+        <span class="muted">no run yet</span>
+      {% endif %}
+    </dd>
+    <dt>Posts added, last 24 hours</dt>
+    <dd>{{ posts_24h }}</dd>
+    <dt>Posts added, last 7 days</dt>
+    <dd>{{ posts_7d }}</dd>
+    <dt>Database on disk</dt>
+    <dd>{{ db_size_bytes | bytes }}</dd>
+    <dt>Raw snapshot bytes</dt>
+    <dd>{{ summary.total_snapshot_bytes | bytes }}</dd>
+    <dt>Newest post</dt>
+    <dd>{{ summary.newest_post_at or "—" }}</dd>
+  </dl>
+  {% if stale_warning %}
+  <p class="warning">
+    No new post in more than 7 days — the newest stored post is
+    {{ summary.newest_post_at }}. That usually means the parser broke rather
+    than that the page went quiet.
+  </p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Posts per day, last 30 days</h2>
+  {% if chart_bars %}
+  <svg class="chart" viewBox="0 0 300 62" role="img" aria-label="Posts per day, last 30 days">
+    <line x1="0" y1="60.5" x2="300" y2="60.5" class="chart-baseline"></line>
+    {% for bar in chart_bars %}
+    <rect x="{{ bar.x }}" y="{{ bar.y }}" width="{{ bar.w }}" height="{{ bar.h }}"><title>{{ bar.day }}: {{ bar.count }} post{% if bar.count != 1 %}s{% endif %}</title></rect>
+    {% endfor %}
+  </svg>
+  {% else %}
+  <p class="muted">No posts in the last 30 days.</p>
+  {% endif %}
+</section>
+
+{% if pages %}
+<section class="panel">
+  <h2>Pages</h2>
+  <table class="data-table">
+    <thead>
+      <tr><th>Page</th><th class="num">Posts</th><th>Newest post</th></tr>
+    </thead>
+    <tbody>
+      {% for page in pages %}
+      <tr>
+        <td class="mono">{{ page.page_url }}</td>
+        <td class="num">{{ page.post_count }}</td>
+        <td>{{ page.newest_post_at or "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if recent %}
+<section class="panel">
+  <h2>Newest posts</h2>
+  <table class="data-table">
+    <thead>
+      <tr><th>Published</th><th>Author</th><th>Text</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for post in recent %}
+      <tr>
+        <td class="mono">{{ post.published_at or post.last_seen }}</td>
+        <td>{{ post.author or "—" }}</td>
+        <td class="post-cell"><span class="excerpt">{{ post.text | excerpt }}</span></td>
+        <td><a href="/posts/{{ post.post_id | urlencode }}">view</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

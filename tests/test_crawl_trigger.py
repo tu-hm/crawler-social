@@ -1,0 +1,256 @@
+"""Required tests from plans/v2/08-trigger-crawl.md.
+
+Every test patches subprocess.Popen -- no test launches a real browser
+or a real crawl.
+"""
+
+from __future__ import annotations
+
+import io
+import re
+import signal
+import sys
+import time
+import types
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from crawler_social.facebook import CaptureError
+from crawler_social.server import jobs, pages as pages_module
+from crawler_social.server.jobs import JobRefused
+from tests.conftest import make_config, make_db
+
+HTTPS_PAGE = "https://www.facebook.com/ExamplePublicPage"
+#: Satisfies the real check_gui_session without a desktop.
+DESKTOP_ENV = {"DISPLAY": ":0"}
+
+
+class FakeProc:
+    """Enough of Popen for the job runner: poll/send_signal/kill/stdout."""
+
+    def __init__(self, argv, **kwargs):
+        self.argv = argv
+        self.kwargs = kwargs
+        self.returncode = None
+        self._poll_result: int | None = None
+        self.signals: list[signal.Signals] = []
+        self.killed = False
+        self.stdout = io.BytesIO(b"")
+        Recorder.calls.append((argv, kwargs))
+
+    def poll(self):
+        return self._poll_result
+
+    def send_signal(self, sig):
+        self.signals.append(sig)
+
+    def kill(self):
+        self.killed = True
+
+    def finish(self, code: int = 0) -> None:
+        self._poll_result = code
+        self.returncode = code
+
+
+class Recorder:
+    calls: list = []
+
+
+@pytest.fixture(autouse=True)
+def fresh_job(monkeypatch):
+    """Isolate the module-level job; record Popen calls; no real GUI need."""
+    jobs.crawl_job.reset()
+    Recorder.calls = []
+    monkeypatch.setattr(jobs.subprocess, "Popen", FakeProc)
+    # The HTML routes consult the GUI session; stub it so route behavior
+    # is deterministic headless or not. (jobs.check_gui_session stays real
+    # so the pass-through test below exercises the actual function.)
+    monkeypatch.setattr(pages_module, "check_gui_session", lambda env=None: None)
+    yield
+    jobs.crawl_job.reset()
+    Recorder.calls = []
+
+
+@pytest.fixture()
+def client(tmp_path: Path) -> TestClient:
+    make_db(tmp_path / "social.db", posts=[], runs=[])
+    from crawler_social.server.app import create_app
+
+    return TestClient(create_app(make_config(tmp_path / "social.db")))
+
+
+def _csrf_token(client: TestClient) -> str:
+    page = client.get("/crawl")
+    match = re.search(r'name="csrf_token" value="([^"]+)"', page.text)
+    assert match, "csrf token missing from the crawl form"
+    return match.group(1)
+
+
+def test_start_refuses_when_a_job_is_already_running():
+    jobs.crawl_job.start(HTTPS_PAGE, 5, env=DESKTOP_ENV)
+    assert len(Recorder.calls) == 1
+    with pytest.raises(JobRefused, match="already running"):
+        jobs.crawl_job.start(HTTPS_PAGE, 5, env=DESKTOP_ENV)
+    assert len(Recorder.calls) == 1  # no second process
+
+
+def test_start_refuses_non_https_and_foreign_hosts():
+    with pytest.raises(JobRefused, match="https"):
+        jobs.crawl_job.start("http://facebook.com/x", 5, env=DESKTOP_ENV)
+    with pytest.raises(JobRefused, match="facebook.com"):
+        jobs.crawl_job.start("https://evil.example/x", 5, env=DESKTOP_ENV)
+    assert Recorder.calls == []
+
+
+def test_start_accepts_https_facebook_url():
+    jobs.crawl_job.start(HTTPS_PAGE, 7, env=DESKTOP_ENV)
+    argv, kwargs = Recorder.calls[0]
+    assert argv == [
+        sys.executable, "-m", "crawler_social.cli", "crawl",
+        HTTPS_PAGE, "--limit", "7",
+    ]
+    assert kwargs["shell"] is False
+
+
+def test_shell_metacharacters_stay_one_argument():
+    tricky = "https://facebook.com/x?q=; rm -rf ~"
+    jobs.crawl_job.start(tricky, 5, env=DESKTOP_ENV)
+    argv, kwargs = Recorder.calls[0]
+    assert tricky in argv  # one argument, untouched
+    assert kwargs["shell"] is False
+
+
+def test_gui_failure_names_display():
+    # The real check_gui_session with an empty env raises the DISPLAY
+    # message; start passes it through as a JobRefused.
+    with pytest.raises(JobRefused, match="DISPLAY"):
+        jobs.crawl_job.start(HTTPS_PAGE, 5, env={})
+    assert Recorder.calls == []
+
+
+def test_post_without_csrf_token_is_403_and_starts_nothing(client: TestClient):
+    resp = client.post("/crawl", data={"page_url": HTTPS_PAGE, "limit": "5"})
+    assert resp.status_code == 403
+    assert Recorder.calls == []
+
+
+def test_post_with_foreign_origin_is_403(client: TestClient):
+    token = _csrf_token(client)
+    resp = client.post(
+        "/crawl",
+        data={"page_url": HTTPS_PAGE, "limit": "5", "csrf_token": token},
+        headers={"Origin": "https://evil.example"},
+    )
+    assert resp.status_code == 403
+    assert Recorder.calls == []
+
+
+def test_post_with_matching_origin_starts_the_crawl(client: TestClient):
+    token = _csrf_token(client)
+    resp = client.post(
+        "/crawl",
+        data={"page_url": HTTPS_PAGE, "limit": "5", "csrf_token": token},
+        headers={"Origin": "http://testserver"},
+        follow_redirects=False,  # the 303 to /crawl must be the response
+    )
+    assert resp.status_code == 303
+    assert len(Recorder.calls) == 1
+    assert Recorder.calls[0][0][4] == HTTPS_PAGE
+
+
+def test_post_refusal_renders_the_reason(client: TestClient, monkeypatch):
+    class StubJob:
+        def start(self, url, limit):
+            raise JobRefused("No graphical session: DISPLAY is empty.")
+
+        def status(self):
+            return {
+                "running": False, "page_url": None, "elapsed_seconds": None,
+                "lines": [], "lines_dropped": 0, "exit_code": None,
+                "stop_requested": False, "lock_busy": False,
+            }
+
+    monkeypatch.setattr(pages_module, "crawl_job", StubJob())
+    token = _csrf_token(client)
+    resp = client.post(
+        "/crawl",
+        data={"page_url": HTTPS_PAGE, "limit": "5", "csrf_token": token},
+        headers={"Origin": "http://testserver"},
+    )
+    assert resp.status_code == 200
+    assert "DISPLAY is empty" in resp.text  # the reason is shown, not hidden
+    assert Recorder.calls == []
+
+
+def test_get_crawl_never_starts_a_job(client: TestClient):
+    resp = client.get("/crawl")
+    assert resp.status_code == 200
+    assert Recorder.calls == []
+
+
+def test_status_reports_running_then_exit_code():
+    jobs.crawl_job.start(HTTPS_PAGE, 5, env=DESKTOP_ENV)
+    fake = jobs.crawl_job._process
+    assert isinstance(fake, FakeProc)
+    status = jobs.crawl_job.status()
+    assert status["running"] is True
+    assert status["elapsed_seconds"] >= 0
+    assert status["exit_code"] is None
+
+    fake.finish(3)
+    status = jobs.crawl_job.status()
+    assert status["running"] is False
+    assert status["exit_code"] == 3
+
+
+def test_api_crawl_status_endpoint(client: TestClient):
+    jobs.crawl_job.start(HTTPS_PAGE, 5, env=DESKTOP_ENV)
+    fake = jobs.crawl_job._process
+    data = client.get("/api/crawl/status").json()
+    assert data["running"] is True
+    assert data["page_url"] == HTTPS_PAGE
+    fake.finish(0)
+    data = client.get("/api/crawl/status").json()
+    assert data["running"] is False
+    assert data["exit_code"] == 0
+
+
+def test_stop_sends_sigterm_first_not_sigkill():
+    jobs.crawl_job.start(HTTPS_PAGE, 5, env=DESKTOP_ENV)
+    fake = jobs.crawl_job._process
+    assert jobs.crawl_job.stop() is True
+    assert fake.signals == [signal.SIGTERM]
+    assert fake.killed is False
+    # A second call inside the grace period does not escalate yet.
+    jobs.crawl_job.stop()
+    assert fake.signals == [signal.SIGTERM]
+    assert fake.killed is False
+    # After the 10-second grace, the next stop escalates to SIGKILL.
+    jobs.crawl_job._stop_sent_at = time.monotonic() - 11
+    jobs.crawl_job.stop()
+    assert fake.killed is True
+
+
+def test_stop_is_a_noop_when_nothing_runs():
+    assert jobs.crawl_job.stop() is False
+
+
+def test_ring_buffer_caps_at_500_lines():
+    job = jobs.CrawlJob()
+    job._pump(types.SimpleNamespace(stdout=io.BytesIO(b"line\n" * 5000)))
+    status = job.status()
+    assert len(status["lines"]) == jobs.MAX_LINES == 500
+    assert status["lines_dropped"] == 4500
+
+
+def test_lock_busy_from_output_is_surfaced(client: TestClient):
+    jobs.crawl_job.start(HTTPS_PAGE, 5, env=DESKTOP_ENV)
+    job = jobs.crawl_job
+    fake = job._process
+    with job._lock:
+        job._lines = ["Another crawler process holds the lock at /tmp/x.lock."]
+    fake.finish(1)
+    page = client.get("/crawl")
+    assert "holds the profile lock" in page.text

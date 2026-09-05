@@ -11,6 +11,10 @@ gitignored `.env` file next to the project root. Supports:
 - CRAWLER_CDP_URL (DevTools endpoint used when the mode is "cdp")
 - CRAWLER_LOCALE, CRAWLER_TIMEZONE (keep the automated browser consistent
   with the machine it runs on)
+- CRAWLER_SERVE_HOST (default "127.0.0.1"; the local web viewer binds
+  loopback only unless told otherwise)
+- CRAWLER_SERVE_PORT (default 8765)
+- CRAWLER_SERVE_TOKEN (unset by default; required for non-loopback binds)
 """
 
 from __future__ import annotations
@@ -24,6 +28,8 @@ from . import paths
 
 ATTACH_MODES = ("launch", "cdp")
 DEFAULT_CDP_URL = "http://127.0.0.1:9222"
+DEFAULT_SERVE_HOST = "127.0.0.1"
+DEFAULT_SERVE_PORT = 8765
 
 
 @dataclass(frozen=True)
@@ -36,6 +42,9 @@ class Config:
     cdp_url: str = DEFAULT_CDP_URL
     locale: str = "en-US"
     timezone_id: str | None = None
+    serve_host: str = DEFAULT_SERVE_HOST
+    serve_port: int = DEFAULT_SERVE_PORT
+    serve_token: str | None = None
 
 
 def _load_dotenv(path: Path) -> dict[str, str]:
@@ -72,6 +81,19 @@ def load_config(env: dict[str, str] | None = None) -> Config:
             f"CRAWLER_ATTACH_MODE must be one of {', '.join(ATTACH_MODES)}; "
             f"got {attach_mode!r}."
         )
+    serve_port_raw = env.get("CRAWLER_SERVE_PORT") or str(DEFAULT_SERVE_PORT)
+    try:
+        serve_port = int(serve_port_raw)
+    except ValueError:
+        raise ValueError(
+            f"CRAWLER_SERVE_PORT must be an integer between 1 and 65535; "
+            f"got {serve_port_raw!r}."
+        ) from None
+    if not 1 <= serve_port <= 65535:
+        raise ValueError(
+            f"CRAWLER_SERVE_PORT must be an integer between 1 and 65535; "
+            f"got {serve_port_raw!r}."
+        )
     return Config(
         browser_binary=env.get("CRAWLER_BROWSER_BINARY") or None,
         profile_dir=profile_dir,
@@ -81,4 +103,7 @@ def load_config(env: dict[str, str] | None = None) -> Config:
         cdp_url=env.get("CRAWLER_CDP_URL") or DEFAULT_CDP_URL,
         locale=env.get("CRAWLER_LOCALE") or "en-US",
         timezone_id=env.get("CRAWLER_TIMEZONE") or None,
+        serve_host=env.get("CRAWLER_SERVE_HOST") or DEFAULT_SERVE_HOST,
+        serve_port=serve_port,
+        serve_token=env.get("CRAWLER_SERVE_TOKEN") or None,
     )

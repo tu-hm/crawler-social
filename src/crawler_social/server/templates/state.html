@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Watermarks — crawler-social{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Watermarks (state)</h1>
+  <a class="button" href="/runs">← All runs</a>
+</div>
+<p class="muted">
+  The watermark is where the next crawl stops: it records the newest post
+  already stored for each page. Clearing it would re-read the whole feed.
+</p>
+
+{% if rows %}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th scope="col">Page</th>
+      <th scope="col">Last post ID</th>
+      <th scope="col">Last post time</th>
+      <th scope="col">Updated (UTC)</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td class="col-page mono">{{ row.page_url }}</td>
+      <td>
+        {% if row.post_url %}
+        <a href="{{ row.post_url }}">{{ row.last_post_id }}</a>
+        {% elif row.last_post_id %}
+        <span class="muted">{{ row.last_post_id }} (post no longer stored)</span>
+        {% else %}
+        <span class="muted">—</span>
+        {% endif %}
+      </td>
+      <td>{{ row.last_post_time or "—" }}</td>
+      <td>{{ row.updated_at }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<section class="empty-state">
+  <p>No watermarks stored yet — they appear after the first crawl.</p>
+</section>
+{% endif %}
+{% endblock %}

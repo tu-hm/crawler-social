@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Snapshot #{{ snapshot.id }} — crawler-social{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Snapshot #{{ snapshot.id }}</h1>
+  <div>
+    <a class="button" href="{{ source_url }}">Source view</a>
+    <a class="button" href="{{ reparse_url }}">Reparse</a>
+    <a class="button" href="{{ download_url }}">Download</a>
+  </div>
+</div>
+
+<div class="detail-grid">
+  <dt>Run</dt>
+  <dd><a href="/runs/{{ snapshot.run_id }}">#{{ snapshot.run_id }}</a></dd>
+  <dt>Page</dt>
+  <dd>{{ snapshot.page_url }}</dd>
+  <dt>Captured (UTC)</dt>
+  <dd>{{ snapshot.captured_at }}</dd>
+  <dt>Size</dt>
+  <dd>{{ snapshot.size_bytes | bytes }}</dd>
+  <dt>SHA-256</dt>
+  <dd class="mono">{{ snapshot.sha256 }}</dd>
+</div>
+
+<p class="notice">
+  The preview below is fully sandboxed: the captured page runs no scripts,
+  loads no resources, and cannot touch this app's origin.
+</p>
+<iframe class="snapshot-frame"
+        src="{{ preview_url }}"
+        sandbox=""
+        referrerpolicy="no-referrer"
+        loading="lazy"
+        title="Sandboxed snapshot preview"></iframe>
+{% endblock %}

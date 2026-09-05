@@ -1,0 +1,7 @@
+<section class="empty-state">
+  <p>{{ empty_message }}</p>
+  {% if empty_command %}
+  <p><code class="command">{{ empty_command }}</code></p>
+  {% endif %}
+  {% if empty_extra %}<p class="muted">{{ empty_extra }}</p>{% endif %}
+</section>

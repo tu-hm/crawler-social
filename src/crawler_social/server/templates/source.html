@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Snapshot #{{ snapshot.id }} source — crawler-social{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Snapshot #{{ snapshot.id }} — source</h1>
+  <div>
+    <a class="button" href="{{ back_url }}">← Snapshot</a>
+    <a class="button" href="{{ download_url }}">Download</a>
+  </div>
+</div>
+<p class="muted mono">{{ snapshot.page_url }} · captured {{ snapshot.captured_at }} · {{ shown_bytes | bytes }}</p>
+
+{% if truncated %}
+<p class="notice">
+  This snapshot is larger than the display limit — showing the first
+  {{ shown_bytes | bytes }} only. Use the download link for the full file.
+</p>
+{% endif %}
+
+<pre class="source-view"><code>{% for n, line in lines %}<span class="ln">{{ n }}</span>{{ line }}
+{% endfor %}</code></pre>
+{% endblock %}

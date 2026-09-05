@@ -34,4 +34,11 @@ CREATE TABLE IF NOT EXISTS state (
     last_post_time  TEXT,
     updated_at      TEXT NOT NULL
 );
+
+-- Viewer indexes (plans/v2/01-read-query-layer.md). Created by the crawler's
+-- db.connect(), never by the server, but they only speed up reads.
+CREATE INDEX IF NOT EXISTS idx_posts_page_url ON posts(page_url);
+CREATE INDEX IF NOT EXISTS idx_posts_sort ON posts(COALESCE(published_at, last_seen));
+CREATE INDEX IF NOT EXISTS idx_snapshots_run ON snapshots(run_id);
+CREATE INDEX IF NOT EXISTS idx_snapshots_page ON snapshots(page_url);
 """

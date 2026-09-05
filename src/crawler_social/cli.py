@@ -124,6 +124,74 @@ def session() -> None:
 
 
 @app.command()
+def serve(
+    host: Optional[str] = typer.Option(
+        None,
+        "--host",
+        help="Address to bind. Loopback only unless --allow-remote is given.",
+    ),
+    port: Optional[int] = typer.Option(
+        None,
+        "--port",
+        min=1,
+        max=65535,
+        help="Port to bind (default 8765, or CRAWLER_SERVE_PORT).",
+    ),
+    allow_remote: bool = typer.Option(
+        False,
+        "--allow-remote",
+        help="Permit a non-loopback bind. Also requires CRAWLER_SERVE_TOKEN.",
+    ),
+    reload: bool = typer.Option(
+        False,
+        "--reload",
+        help="Restart the server on code changes (development only).",
+    ),
+) -> None:
+    """Serve the local read-only web viewer for the stored data."""
+    from .server.app import build_app, create_app, validate_remote_bind
+
+    config = load_config()
+    host = host or config.serve_host
+    port = port if port is not None else config.serve_port
+
+    refusal = validate_remote_bind(
+        host, allow_remote=allow_remote, token=config.serve_token
+    )
+    if refusal:
+        typer.secho(refusal, fg=typer.colors.RED, err=True)
+        raise typer.Exit(2)
+
+    typer.echo(f"crawler-social web viewer: http://{host}:{port}")
+    import uvicorn
+
+    try:
+        if reload:
+            uvicorn.run(
+                "crawler_social.server.app:build_app",
+                host=host,
+                port=port,
+                reload=True,
+                factory=True,
+                timeout_keep_alive=5,
+                access_log=False,
+            )
+        else:
+            # uvicorn's own access log prints the raw query string, token
+            # included; the app's redacting request log replaces it.
+            uvicorn.run(
+                create_app(config),
+                host=host,
+                port=port,
+                timeout_keep_alive=5,
+                access_log=False,
+            )
+    except KeyboardInterrupt:
+        # Ctrl-C on a running server is a normal shutdown, not an error.
+        raise typer.Exit(0) from None
+
+
+@app.command()
 def posts(
     limit: int = typer.Option(
         10,

@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Snapshots — crawler-social{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Snapshots</h1>
+</div>
+<p class="muted">Metadata only — captured HTML is never loaded into a list view.</p>
+
+<form class="filter-bar" method="get" action="/snapshots" data-auto>
+  <label>
+    Run ID
+    <input type="text" name="run_id" value="{{ run_id }}" inputmode="numeric" placeholder="any">
+  </label>
+  <label>
+    Page
+    <select name="page_url" data-auto>
+      <option value="">All pages</option>
+      {% for page in pages %}
+      <option value="{{ page.page_url }}"{% if page_url == page.page_url %} selected{% endif %}>{{ page.page_url }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit">Filter</button>
+  {% if run_id or page_url %}<a class="button" href="/snapshots">Clear</a>{% endif %}
+</form>
+
+{% if rows %}
+<p class="result-count">{{ total }} snapshot{% if total != 1 %}s{% endif %}</p>
+<div class="table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th scope="col" class="num">ID</th>
+      <th scope="col" class="num">Run</th>
+      <th scope="col">Page</th>
+      <th scope="col">Captured (UTC)</th>
+      <th scope="col" class="num">Size</th>
+      <th scope="col">SHA-256</th>
+      <th scope="col"><span class="visually-hidden">Open</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td class="num"><a href="/snapshots/{{ row.id }}">#{{ row.id }}</a></td>
+      <td class="num"><a href="/snapshots?run_id={{ row.run_id }}">{{ row.run_id }}</a></td>
+      <td class="col-page">{{ row.page_url }}</td>
+      <td class="col-when">{{ row.captured_at }}</td>
+      <td class="num">{{ row.size_bytes | bytes }}</td>
+      <td class="mono secondary">{{ row.sha12 }}…</td>
+      <td><a class="button" href="/snapshots/{{ row.id }}">View →</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% include "partials/pagination.html" %}
+{% else %}
+<section class="empty-state">
+  <p>No snapshots match.</p>
+  {% if run_id or page_url %}<p><a class="button" href="/snapshots">Clear filters</a></p>{% endif %}
+</section>
+{% endif %}
+{% endblock %}

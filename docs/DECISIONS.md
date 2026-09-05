@@ -90,6 +90,8 @@ triggers, the verify checklist and the open questions),
 | [0061](#adr-0061) | Delivery order: Facebook → Telegram → Reddit → X | Test the design at connector two, not connector four. |
 | [0062](#adr-0062) | The Facebook extraction spike is a parse-quality gate, not a project gate | Choosing wrong at a project gate costs everything before it. |
 | [0063](#adr-0063) | Legal baseline: Law 91/2025 + Decree 356/2025, no exemption assumed | Decree 13/2023 was repealed on 2026-01-01. |
+| **F. v2 — local web viewer** | | |
+| [0064](#adr-0064) | The web viewer is read-only and loopback-bound by construction | The crawler is the single writer; snapshot HTML is untrusted. |
 
 ---
 
@@ -1859,6 +1861,146 @@ so the restriction cannot be lost when the data moves.
 
 ---
 
-*Frozen 2026-09-01. To reopen an entry, change the "Rejected" column — that is, produce
-the fact or the trigger that was missing when it was closed. Do not reopen one by
-re-arguing the same trade-off.*
+## F. v2 — local web viewer
+
+*Added 2026-09-05 for the v2 server and UI (`plans/v2/`). The v1 rulings above stay
+frozen; these follow the same format.*
+
+<a id="adr-0064"></a>
+### ADR-0064 — The web viewer is read-only and loopback-bound by construction
+
+**Context.** v2 adds a local web face over `data/social.db`: an HTTP server, a UI, and a
+data viewer for posts, snapshots, and runs. The same SQLite file is written by the
+crawler, and `snapshots.html` is unmodified third-party markup captured from Facebook.
+
+**Decision.** The server opens SQLite **read-only through a URI**
+(`file:...?mode=ro`) via its own `queries.py` module — `db.connect()`'s
+`executescript(SCHEMA_SQL)` is never on the read path, so the server cannot create or
+migrate a table even by accident. Any crawl trigger spawns the existing CLI as a
+subprocess, so the **crawler stays the single writer**. The server binds to
+`127.0.0.1` by default; a non-loopback bind requires an explicit `--allow-remote` flag
+plus a token. Snapshot HTML is never rendered into the app's own pages — it is served
+sandboxed with a `default-src 'none'` CSP.
+
+**Rejected.** Sharing `db.connect()` with the viewer ("we'll just not write") — a
+capability you hold by discipline is a capability you eventually use. Binding
+`0.0.0.0` for convenience — the database contains third-party personal data and the
+pages carry no auth by default.
+
+**Consequences.** Concurrent reads ride WAL while a crawl writes, with no locking
+coordination in the server at all. The one writer rule (v1's `FileLock`) also covers
+UI-triggered crawls, because they are ordinary `crawler crawl` processes competing for
+the same lock. The untrusted-HTML rule costs a sandboxed iframe and a strict CSP on the
+raw route, and pays for itself the first time a captured page tries to phone home.
+
+---
+
+<a id="adr-0065"></a>
+### ADR-0065 — FastAPI over a bare stdlib server
+
+**Context.** v2 needs an HTTP server over SQLite with a JSON API, server-rendered
+pages, query validation, and a test story — on both macOS and Linux, with nothing
+added to the toolchain beyond Python packages.
+
+**Decision.** Build on FastAPI, uvicorn, Jinja2, and python-multipart. Routes declare
+query parameters once; the per-request read-only connection arrives as a dependency
+(`get_conn`), so no route can forget to open or close it; `TestClient` exercises every
+route without a socket. The JSON API validates strictly (422 on bad input) while HTML
+routes deliberately fall back to defaults — two audiences, one parameter vocabulary.
+
+**Rejected.** `http.server` plus hand-rolled dispatch — every parameter, content type,
+and error shape becomes bespoke code with no test harness, and the JSON API alone
+would reintroduce a mini-framework. Flask — equivalent for this job, but FastAPI's
+dependency injection maps exactly onto the per-request read-only connection that the
+read-only-by-construction rule needs.
+
+**Consequences.** Three direct packages and their transitives enter the venv
+(audited in `plans/v2/09`: only fastapi, uvicorn, jinja2, pydantic, python-multipart
+and their requirements). Starlette version coupling is accepted; nothing in v2
+imports Starlette directly except the hardening middlewares.
+
+---
+
+<a id="adr-0066"></a>
+### ADR-0066 — Server-rendered HTML; no JavaScript framework, no build step
+
+**Context.** The UI is one person browsing their own crawl data on localhost, and the
+v1 ground rules already ban Node/npm/bundlers as an unjustified supply chain.
+
+**Decision.** Jinja2 templates rendered on the server, with exactly two static files
+(`app.css`, `app.js`) served as real files — which the Step 09 CSP requires anyway,
+since it forbids inline script and style. Interactivity is deliberately modest:
+form-driven filters with full page loads, a 500 ms debounced auto-submit on text
+input, a two-second status poll on `/crawl`, and a clipboard copy on the post page.
+The home-page chart is inline SVG generated from a `GROUP BY date(first_seen)` —
+no chart library, no CDN.
+
+**Rejected.** Any JS framework or bundler — a build step, a `node_modules` tree, and
+a second dependency audit for a localhost tool. Fetch-and-patch rendering — two
+rendering paths to keep in sync for no capability the tool actually needs.
+
+**Consequences.** Every action costs a page load, and live crawl output is a poll,
+not a stream. The win is that the rendered page is the whole contract: what the
+template renders is what the browser runs, and the CSP test greps prove it.
+
+---
+
+<a id="adr-0067"></a>
+### ADR-0067 — A UI crawl is a subprocess, not a thread or background task
+
+**Context.** "Crawl now" must run `pipeline.run_crawl`, which installs
+`SIGINT`/`SIGTERM` handlers with `signal.signal` — legal only in the main thread of
+a process. Server handlers run in worker threads, and asyncio background tasks are
+not the main thread either.
+
+**Decision.** The server spawns
+`[sys.executable, "-m", "crawler_social.cli", "crawl", page_url, "--limit", str(n)]`
+— list argv, `shell=False` — and tails its output with a reader thread into a
+500-line ring buffer. Stop sends `SIGTERM`, which the pipeline already treats as a
+graceful "interrupted" stop, escalating to `SIGKILL` after a 10-second grace. The
+in-process one-job flag handles the common double-click; the existing `FileLock`
+profile lock remains the real mutual exclusion against a crawl started in a
+terminal, and its "holds the lock" message is surfaced readably.
+
+**Rejected.** Running the pipeline in a thread or FastAPI background task —
+`signal.signal` raises `ValueError` outside the main thread, so the pipeline would
+need a rewrite that weakens v1's graceful-stop guarantees. Import-and-call in the
+server process — a crashed crawl would take the server down with it.
+
+**Consequences.** The page URL becomes a process argument and a browser navigation,
+so it is validated against an https + facebook.com allowlist before spawn
+(`plans/v2/08`). Output reaches the UI by polling the captured lines, never shared
+memory.
+
+---
+
+<a id="adr-0068"></a>
+### ADR-0068 — The read path is read-only by construction, and a route sweep proves it
+
+**Context.** ADR-0064 froze "the server opens SQLite read-only through a URI". The
+remaining question is how that property is *enforced* as routes accumulate across
+steps.
+
+**Decision.** One dependency (`get_conn`) is the only way a route obtains a
+connection: `file:...?mode=ro`, `PRAGMA query_only = ON`, a five-second busy
+timeout, closed in a `finally`. Pages that must work without a database use a
+separate opener that returns `None` and render an empty state. The property is then
+tested, not promised: the full HTML and API route table is walked against a
+database file with permissions `0o444`, and every response must be non-5xx
+(`tests/test_server_security.py`). Any route that ever needs a write fails loudly
+there.
+
+**Rejected.** A per-route promise ("this handler only SELECTs") — code review is
+not a memory. A read-only database user or ACL — the same file must stay writable
+for the crawler, so the guarantee has to live in the connection itself.
+
+**Consequences.** The reparse view can run the parser in memory with no write path
+at all. Anything genuinely state-changing goes out through the subprocess of
+ADR-0067 and the crawler's own writer, which also keeps `PRAGMA integrity_check`
+meaningful for the UI-triggered flow.
+
+---
+
+*Frozen 2026-09-01 for sections A–E. To reopen an entry, change the "Rejected" column —
+that is, produce the fact or the trigger that was missing when it was closed. Do not
+reopen one by re-arguing the same trade-off.*
