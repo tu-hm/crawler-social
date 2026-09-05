@@ -21,6 +21,31 @@ Build one public Facebook Page crawler by following
 Do not apply for other platform credentials, design private storage, or install a scheduler
 for this version.
 
+### Getting a session
+
+Facebook serves a login wall in place of Page content, at the Page's own URL. Sign in
+once, by hand, before the first crawl — the crawler never types credentials:
+
+```console
+uv run crawler login     # a window opens; sign in yourself, 2FA included
+uv run crawler session   # "session looks live (ok)"
+uv run crawler crawl "https://www.facebook.com/<page>" --limit 5
+```
+
+If signing in that way gets challenged, attach to a Chrome you started yourself instead
+— a browser automation did not launch is not flagged as automated:
+
+```console
+make chrome-cdp          # your Chrome, with --remote-debugging-port=9222
+# log in in that window, leave it open, then:
+CRAWLER_ATTACH_MODE=cdp uv run crawler crawl "https://www.facebook.com/<page>"
+```
+
+A crawl that meets a login wall, checkpoint, or rate limit stores the offending snapshot
+as evidence, leaves the watermark untouched, and exits `3` with the remedy. See
+[plans/v1/07-session-and-access.md](./plans/v1/07-session-and-access.md) for the full
+rationale, the pacing budgets, and the back-off ladder.
+
 ## Legacy multi-source design
 
 A personal ingestion tool that pulls one person's social and messaging activity into SQLite

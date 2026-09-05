@@ -70,7 +70,57 @@ def crawl(
         f"({summary.snapshots_total} total) | new posts: {summary.new_posts} "
         f"| existing posts: {summary.existing_posts} | errors: {summary.errors}"
     )
+    if summary.blocked:
+        typer.echo(f"status: {summary.status} (blocked: {summary.blocked})")
+        typer.secho(summary.blocked_message or "", fg=typer.colors.YELLOW, err=True)
+        raise typer.Exit(3)
     typer.echo(f"status: {summary.status}")
+
+
+@app.command()
+def login() -> None:
+    """Open a browser and wait while you sign in to Facebook by hand.
+
+    Credentials are never typed by this program. Doing the login in a window
+    you control -- ideally with CRAWLER_ATTACH_MODE=cdp against your own
+    Chrome -- is what keeps the sign-in from being treated as automated.
+    """
+    from . import facebook
+
+    config = load_config()
+    try:
+        verdict = facebook.login(config)
+    except Exception as exc:  # noqa: BLE001 - one clear message for the user
+        typer.secho(f"login failed: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from exc
+    typer.secho(
+        f"Signed in. Session verdict: {verdict.kind}.",
+        fg=typer.colors.GREEN,
+    )
+
+
+@app.command()
+def session() -> None:
+    """Report whether the browser profile currently holds a live session."""
+    from . import facebook, wall
+
+    config = load_config()
+    typer.echo(f"attach mode: {config.attach_mode}")
+    typer.echo(f"profile:     {config.profile_dir}")
+    if config.attach_mode == "cdp":
+        typer.echo(f"cdp url:     {config.cdp_url}")
+    try:
+        verdict = facebook.check_session(config)
+    except Exception as exc:  # noqa: BLE001 - one clear message for the user
+        typer.secho(f"session check failed: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from exc
+    if verdict.kind == wall.LOGIN_WALL:
+        typer.secho("not logged in. Run `crawler login`.", fg=typer.colors.RED)
+        raise typer.Exit(3)
+    if verdict.blocking:
+        typer.secho(verdict.message, fg=typer.colors.YELLOW)
+        raise typer.Exit(3)
+    typer.secho(f"session looks live ({verdict.kind}).", fg=typer.colors.GREEN)
 
 
 @app.command()
