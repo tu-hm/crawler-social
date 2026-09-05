@@ -95,6 +95,49 @@ result set.
   works only on a desktop session with a visible browser, and refuses a second crawl
   while one is running.
 
+## Long posts and comments (plans/v3)
+
+Facebook truncates a long post body behind a **See more** button, and the hidden tail is
+genuinely absent from the DOM until that button is clicked — no amount of parsing
+recovers it afterwards. So the crawler clicks it at capture time, before it reads the
+page. This is on by default:
+
+```console
+uv run crawler crawl <page-url>                  # bodies expanded
+uv run crawler crawl <page-url> --no-expand      # capture what is on screen
+```
+
+Only elements with the button role are clicked, each click is budgeted and re-queried,
+and if a click ever navigates away the crawler goes back and stops expanding — an
+expansion click must never turn into a page visit you did not ask for.
+
+**Comments are off by default**, because each post you ask for costs one extra page
+visit: they are read from the post's own permalink page, not from the feed, which is
+virtualized and does not order comments by relevance.
+
+```console
+uv run crawler crawl <page-url> --comments 10                       # top 10 per post
+uv run crawler crawl <page-url> --comments 10 --comments-max-posts 5
+uv run crawler comments --post-id <id> --limit 20                   # read them back
+```
+
+- **"Top N" means the first N in Facebook's own default order.** The crawler does not
+  re-rank; `rank_index` records the position a comment held when it was captured.
+  Nested replies are excluded — only top-level comments are stored.
+- **Comments never cost you posts.** The pass runs *after* the post transaction commits,
+  so a permalink that will not load, or a comment thread that fails to expand, becomes a
+  diagnostic on a run that still reports `completed`. A wall (login, checkpoint, rate
+  limit) is the one exception: it stops the run, and the posts stay committed.
+- **Defaults live in `.env`** as `CRAWLER_TOP_COMMENTS`, `CRAWLER_COMMENTS_MAX_POSTS`,
+  and `CRAWLER_EXPAND_TEXT`; the command-line flags override them per run.
+
+The viewer shows comments on a post's detail page and serves them at
+`GET /api/posts/<id>/comments`. Adding these was an additive migration: `posts` gained a
+`post_url` column and a `comments` table appeared, both applied in place on the next
+crawl. The viewer opens the database read-only and so cannot migrate anything — it
+detects what the file actually has, and a database written before v3 still browses
+normally.
+
 ## Legacy multi-source design
 
 A personal ingestion tool that pulls one person's social and messaging activity into SQLite

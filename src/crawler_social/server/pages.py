@@ -257,6 +257,10 @@ def _open_readonly(request: Request):
         return None
 
 
+#: Comments shown inline on a post page; the API serves the rest.
+COMMENTS_ON_POST_PAGE = 50
+
+
 def _int_or_none(value: str | None) -> int | None:
     if not value:
         return None
@@ -281,6 +285,9 @@ def post_detail(request: Request, post_id: str):
         )
         prev_post, next_post = queries.post_neighbors(conn, post, order)
         near = queries.snapshots_near_post(conn, post)
+        comments, comment_total = queries.list_comments(
+            conn, post_id=post_id, limit=COMMENTS_ON_POST_PAGE
+        )
         context = base_context(request, conn)
     finally:
         conn.close()
@@ -302,6 +309,8 @@ def post_detail(request: Request, post_id: str):
             else None
         ),
         snapshots_near=near,
+        comments=comments,
+        comment_total=comment_total,
         page_url_q=quote(post["page_url"], safe=""),
     )
     return render(request, "post.html", context)
@@ -694,6 +703,7 @@ def _crawl_context(request: Request, **extra: Any) -> dict[str, Any]:
         csrf_token=request.app.state.csrf_token,
         page_url_value=request.app.state.config.page_url or "",
         limit_value=20,
+        comments_value=request.app.state.config.top_comments,
         pages=known_pages,
         gui_ready=gui_ready,
         last_run=last_run,
@@ -720,9 +730,16 @@ async def crawl_start(request: Request):
     except ValueError:
         limit = 20
     limit = max(1, min(limit, 500))
+    try:
+        comments = int(str(form.get("comments") or 0))
+    except ValueError:
+        comments = 0
+    # Clamped here, not just in the CLI: this value becomes an argv entry and
+    # a per-post permalink navigation.
+    comments = max(0, min(comments, 100))
     page_url = str(form.get("page_url") or "").strip()
     try:
-        crawl_job.start(page_url, limit)
+        crawl_job.start(page_url, limit, comments=comments)
     except JobRefused as exc:
         return render(
             request, "crawl.html", _crawl_context(request, reason=str(exc))

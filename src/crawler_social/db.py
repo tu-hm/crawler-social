@@ -29,8 +29,32 @@ def connect(path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(SCHEMA_SQL)
+    _migrate_columns(conn)
     conn.commit()
     return conn
+
+
+#: Columns added after the first databases were written. `CREATE TABLE IF
+#: NOT EXISTS` does nothing for a table that already exists, so a column
+#: added to schema.py later needs a real ALTER. Additive only: nothing here
+#: rewrites or drops, so it is safe to run on every connect.
+_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("posts", "post_url", "ALTER TABLE posts ADD COLUMN post_url TEXT"),
+)
+
+
+def _migrate_columns(conn: sqlite3.Connection) -> list[str]:
+    """Add any column schema.py declares that this file does not have yet."""
+    applied: list[str] = []
+    for table, column, statement in _ADDED_COLUMNS:
+        existing = {
+            row[1] for row in conn.execute(f"PRAGMA table_info({table})")
+        }
+        if not existing or column in existing:
+            continue
+        conn.execute(statement)
+        applied.append(f"{table}.{column}")
+    return applied
 
 
 @contextmanager
@@ -107,20 +131,80 @@ def upsert_post(
     author: str | None,
     published_at: str | None,
     seen_at: str | None = None,
+    post_url: str | None = None,
 ) -> None:
     seen = seen_at or utc_now_iso()
     conn.execute(
         """
-        INSERT INTO posts (post_id, page_url, text, author, published_at, first_seen, last_seen)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO posts (post_id, page_url, text, author, published_at, post_url, first_seen, last_seen)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(post_id) DO UPDATE SET
             text = COALESCE(excluded.text, posts.text),
             author = COALESCE(excluded.author, posts.author),
             published_at = COALESCE(excluded.published_at, posts.published_at),
+            post_url = COALESCE(excluded.post_url, posts.post_url),
             last_seen = excluded.last_seen
         """,
-        (post_id, page_url, text, author, published_at, seen, seen),
+        (post_id, page_url, text, author, published_at, post_url, seen, seen),
     )
+
+
+def upsert_comment(
+    conn: sqlite3.Connection,
+    comment_id: str,
+    post_id: str,
+    page_url: str,
+    author: str | None,
+    text: str | None,
+    published_at: str | None,
+    like_count: int | None,
+    rank_index: int,
+    seen_at: str | None = None,
+) -> None:
+    """Store one comment, keeping the best values seen so far.
+
+    The nullable fields are COALESCEd like a post's, so a later, poorer
+    parse never erases a better one. rank_index is overwritten on purpose:
+    the newest observed position in Facebook's ordering is the useful one.
+    """
+    seen = seen_at or utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO comments (comment_id, post_id, page_url, author, text,
+                              published_at, like_count, rank_index,
+                              first_seen, last_seen)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(comment_id) DO UPDATE SET
+            author = COALESCE(excluded.author, comments.author),
+            text = COALESCE(excluded.text, comments.text),
+            published_at = COALESCE(excluded.published_at, comments.published_at),
+            like_count = COALESCE(excluded.like_count, comments.like_count),
+            rank_index = excluded.rank_index,
+            last_seen = excluded.last_seen
+        """,
+        (
+            comment_id,
+            post_id,
+            page_url,
+            author,
+            text,
+            published_at,
+            like_count,
+            rank_index,
+            seen,
+            seen,
+        ),
+    )
+
+
+def comment_count(conn: sqlite3.Connection, post_id: str | None = None) -> int:
+    if post_id is None:
+        row = conn.execute("SELECT COUNT(*) FROM comments").fetchone()
+    else:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM comments WHERE post_id = ?", (post_id,)
+        ).fetchone()
+    return int(row[0])
 
 
 def get_state(conn: sqlite3.Connection, page_url: str) -> Optional[dict]:
@@ -192,5 +276,24 @@ def list_posts(
         escaped = contains.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         params.append(f"%{escaped}%")
     sql += " ORDER BY COALESCE(published_at, last_seen) DESC LIMIT ?"
+    params.append(limit)
+    return conn.execute(sql, params).fetchall()
+
+
+def list_comments(
+    conn: sqlite3.Connection,
+    post_id: str | None = None,
+    limit: int = 20,
+) -> list[tuple]:
+    """List comments in Facebook's own order (rank_index), newest post first."""
+    sql = (
+        "SELECT comment_id, post_id, page_url, author, text, published_at,"
+        " like_count, rank_index, first_seen, last_seen FROM comments"
+    )
+    params: list[object] = []
+    if post_id is not None:
+        sql += " WHERE post_id = ?"
+        params.append(post_id)
+    sql += " ORDER BY first_seen DESC, post_id ASC, rank_index ASC LIMIT ?"
     params.append(limit)
     return conn.execute(sql, params).fetchall()

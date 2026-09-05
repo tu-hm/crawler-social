@@ -56,6 +56,11 @@
     New-post limit
     <input type="number" name="limit" value="{{ limit_value }}" min="1" max="500">
   </label>
+  <label>
+    Top comments per post
+    <input type="number" name="comments" value="{{ comments_value }}" min="0" max="100">
+    <span class="muted">0 collects none. Each post asked for costs one extra page visit.</span>
+  </label>
   <button class="button button-primary" type="submit">Crawl now</button>
 </form>
 {% endif %}

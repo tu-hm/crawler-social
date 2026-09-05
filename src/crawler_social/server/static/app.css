@@ -380,6 +380,16 @@ pre.source-view .ln {
   gap: 1rem;
   margin: 1.5rem 0;
 }
+.comment-list { margin: 0.5rem 0; padding-left: 1.5rem; }
+.comment { margin: 0 0 0.9rem; }
+.comment-head { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: baseline; }
+.comment-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-width: 70ch;
+  margin-top: 0.2rem;
+}
+
 .snapshot-links { margin: 0.5rem 0; padding-left: 1.25rem; }
 .snapshot-links li { margin: 0.2rem 0; }
 .reparse-post { border-top: 1px solid var(--border); padding: 0.75rem 0; }

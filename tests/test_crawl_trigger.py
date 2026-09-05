@@ -162,7 +162,7 @@ def test_post_with_matching_origin_starts_the_crawl(client: TestClient):
 
 def test_post_refusal_renders_the_reason(client: TestClient, monkeypatch):
     class StubJob:
-        def start(self, url, limit):
+        def start(self, url, limit, **kwargs):
             raise JobRefused("No graphical session: DISPLAY is empty.")
 
         def status(self):
@@ -254,3 +254,73 @@ def test_lock_busy_from_output_is_surfaced(client: TestClient):
     fake.finish(1)
     page = client.get("/crawl")
     assert "holds the profile lock" in page.text
+
+
+# -- v3: the comments option reaches the subprocess argv --------------------
+
+
+def test_comments_are_appended_to_the_argv_only_when_asked_for():
+    jobs.crawl_job.start(HTTPS_PAGE, 7, env=DESKTOP_ENV)
+    argv, _ = Recorder.calls[0]
+    assert "--comments" not in argv
+
+    jobs.crawl_job.reset()
+    Recorder.calls = []
+    jobs.crawl_job.start(
+        HTTPS_PAGE, 7, comments=5, comments_max_posts=3, env=DESKTOP_ENV
+    )
+    argv, kwargs = Recorder.calls[0]
+    assert argv[-4:] == ["--comments", "5", "--comments-max-posts", "3"]
+    assert kwargs["shell"] is False
+
+
+def test_the_form_clamps_the_comment_count(client: TestClient):
+    """It becomes an argv entry and a permalink visit per post."""
+    started = {}
+
+    class StubJob:
+        def start(self, url, limit, **kwargs):
+            started.update(kwargs)
+
+        def stop(self):
+            return False
+
+        def status(self):
+            return {
+                "running": False, "page_url": None, "elapsed_seconds": None,
+                "lines": [], "lines_dropped": 0, "exit_code": None,
+                "stop_requested": False, "lock_busy": False,
+            }
+
+    monkeypatched = StubJob()
+    original = pages_module.crawl_job
+    pages_module.crawl_job = monkeypatched
+    try:
+        token = _csrf_token(client)
+        client.post(
+            "/crawl",
+            data={
+                "page_url": HTTPS_PAGE,
+                "limit": "5",
+                "comments": "9999",
+                "csrf_token": token,
+            },
+            headers={"Origin": "http://testserver"},
+        )
+        assert started["comments"] == 100
+
+        started.clear()
+        client.post(
+            "/crawl",
+            data={
+                "page_url": HTTPS_PAGE,
+                "limit": "5",
+                "comments": "not a number",
+                "csrf_token": token,
+            },
+            headers={"Origin": "http://testserver"},
+        )
+        assert started["comments"] == 0
+    finally:
+        pages_module.crawl_job = original
+

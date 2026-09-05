@@ -87,6 +87,8 @@ class CrawlJob:
         page_url: str,
         limit: int,
         *,
+        comments: int = 0,
+        comments_max_posts: int | None = None,
         env: dict | None = None,
     ) -> None:
         """Spawn `crawler crawl` for page_url, or raise JobRefused."""
@@ -112,6 +114,10 @@ class CrawlJob:
             "--limit",
             str(int(limit)),
         ]
+        if comments:
+            argv += ["--comments", str(int(comments))]
+            if comments_max_posts:
+                argv += ["--comments-max-posts", str(int(comments_max_posts))]
         # A list argv with shell=False: the URL is one argument, never a
         # shell string, so metacharacters cannot be interpreted.
         proc = subprocess.Popen(  # noqa: S603

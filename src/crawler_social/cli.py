@@ -47,6 +47,24 @@ def crawl(
         min=1,
         help="Hard ceiling on newly emitted posts.",
     ),
+    comments: Optional[int] = typer.Option(
+        None,
+        "--comments",
+        min=0,
+        help="Top comments to collect per post (0 = none). Default: "
+        "CRAWLER_TOP_COMMENTS, itself 0.",
+    ),
+    comments_max_posts: Optional[int] = typer.Option(
+        None,
+        "--comments-max-posts",
+        min=1,
+        help="Ceiling on how many posts get a permalink visit for comments.",
+    ),
+    expand: Optional[bool] = typer.Option(
+        None,
+        "--expand/--no-expand",
+        help='Click "See more" so long post bodies are captured in full.',
+    ),
 ) -> None:
     """Capture raw HTML snapshots of the Page, then parse and store posts."""
     from .pipeline import run_crawl
@@ -61,7 +79,14 @@ def crawl(
         )
         raise typer.Exit(2)
     try:
-        summary = run_crawl(url, limit=limit, config=config)
+        summary = run_crawl(
+            url,
+            limit=limit,
+            config=config,
+            top_comments=comments,
+            comments_max_posts=comments_max_posts,
+            expand_text=expand,
+        )
     except Exception as exc:  # noqa: BLE001 - surfaced as failed run
         typer.secho(f"crawl failed: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from exc
@@ -70,6 +95,11 @@ def crawl(
         f"({summary.snapshots_total} total) | new posts: {summary.new_posts} "
         f"| existing posts: {summary.existing_posts} | errors: {summary.errors}"
     )
+    if summary.posts_with_comments or summary.comments_captured:
+        typer.echo(
+            f"comments: {summary.comments_captured} "
+            f"across {summary.posts_with_comments} posts"
+        )
     if summary.blocked:
         typer.echo(f"status: {summary.status} (blocked: {summary.blocked})")
         typer.secho(summary.blocked_message or "", fg=typer.colors.YELLOW, err=True)
@@ -223,6 +253,56 @@ def posts(
         typer.echo(f"  author:   {author if author is not None else '(none)'}")
         typer.echo(f"  time:     {published_at if published_at is not None else '(none)'}")
         typer.echo(f"  seen:     {first_seen} -> {last_seen}")
+        excerpt = (text or "").replace("\n", " ")[:200]
+        typer.echo(f"  text:     {excerpt}")
+
+
+@app.command()
+def comments(
+    post_id: Optional[str] = typer.Option(
+        None,
+        "--post-id",
+        help="Only show comments on this post.",
+    ),
+    limit: int = typer.Option(
+        20,
+        "--limit",
+        min=1,
+        help="Maximum number of comments to show.",
+    ),
+) -> None:
+    """List stored comments, in the order Facebook showed them."""
+    from .db import connect, list_comments
+
+    config = load_config()
+    if not config.db_path.exists():
+        typer.echo("No database yet. Run `crawler crawl --comments N` first.")
+        raise typer.Exit(0)
+    with connect(config.db_path) as conn:
+        rows = list_comments(conn, post_id=post_id, limit=limit)
+    if not rows:
+        typer.echo(
+            "No comments stored yet. Run `crawler crawl --comments N` first."
+        )
+        return
+    for row in rows:
+        (
+            comment_id,
+            row_post_id,
+            _page_url,
+            author,
+            text,
+            published_at,
+            like_count,
+            rank_index,
+            _first_seen,
+            _last_seen,
+        ) = row
+        typer.echo(f"- #{rank_index} {comment_id}")
+        typer.echo(f"  post:     {row_post_id}")
+        typer.echo(f"  author:   {author if author is not None else '(none)'}")
+        typer.echo(f"  time:     {published_at if published_at is not None else '(none)'}")
+        typer.echo(f"  likes:    {like_count if like_count is not None else '(none)'}")
         excerpt = (text or "").replace("\n", " ")[:200]
         typer.echo(f"  text:     {excerpt}")
 

@@ -1,4 +1,4 @@
-"""SQLite schema for crawler-social: four tables only."""
+"""SQLite schema for crawler-social: five tables only."""
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -24,6 +24,24 @@ CREATE TABLE IF NOT EXISTS posts (
     text          TEXT,
     author        TEXT,
     published_at  TEXT,
+    post_url      TEXT,
+    first_seen    TEXT NOT NULL,
+    last_seen     TEXT NOT NULL
+);
+
+-- Top comments for a post (plans/v3/02). rank_index is 1-based document
+-- order on the permalink page, which Facebook orders by "most relevant" --
+-- so rank 1 is the top comment. Replies nested under a comment are not
+-- stored; only top-level comments are ranked.
+CREATE TABLE IF NOT EXISTS comments (
+    comment_id    TEXT PRIMARY KEY,
+    post_id       TEXT NOT NULL REFERENCES posts(post_id),
+    page_url      TEXT NOT NULL,
+    author        TEXT,
+    text          TEXT,
+    published_at  TEXT,
+    like_count    INTEGER,
+    rank_index    INTEGER NOT NULL,
     first_seen    TEXT NOT NULL,
     last_seen     TEXT NOT NULL
 );
@@ -41,4 +59,5 @@ CREATE INDEX IF NOT EXISTS idx_posts_page_url ON posts(page_url);
 CREATE INDEX IF NOT EXISTS idx_posts_sort ON posts(COALESCE(published_at, last_seen));
 CREATE INDEX IF NOT EXISTS idx_snapshots_run ON snapshots(run_id);
 CREATE INDEX IF NOT EXISTS idx_snapshots_page ON snapshots(page_url);
+CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id, rank_index);
 """

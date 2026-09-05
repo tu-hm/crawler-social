@@ -40,6 +40,32 @@ SCROLL_PAUSE_MS = 1500
 DEFAULT_MAX_SECONDS = 180.0
 HOME_URL = "https://www.facebook.com/"
 
+#: Every expansion click gets its own short timeout. Playwright's default is
+#: 30s; a stuck element must cost a second, not half a minute times a budget.
+CLICK_TIMEOUT_MS = 1500
+#: How many matches of a label pattern are examined for a visible one.
+_SCAN_LIMIT = 25
+
+#: Anchored against the *accessible name*, so "Xem them binh luan" ("view
+#: more comments") cannot match the plain "see more" that expands a body.
+SEE_MORE_PATTERN = re.compile(
+    r"^\s*(?:see\s+more|xem\s+th\u00eam|voir\s+plus|mehr\s+anzeigen|"
+    r"ver\s+m\u00e1s|\u2026\s*more|more)\s*$",
+    re.IGNORECASE,
+)
+#: Deliberately unanchored: Facebook renders counts inside the label.
+MORE_COMMENTS_PATTERN = re.compile(
+    r"(?:view|load|see)\s+(?:\d[\d.,]*\s+)?(?:more\s+|previous\s+)?comments?"
+    r"|xem\s+th\u00eam\s+b\u00ecnh\s+lu\u1eadn"
+    r"|xem\s+(?:c\u00e1c\s+)?b\u00ecnh\s+lu\u1eadn\s+(?:tr\u01b0\u1edbc|kh\u00e1c)",
+    re.IGNORECASE,
+)
+MORE_REPLIES_PATTERN = re.compile(
+    r"(?:view|see)\s+(?:all\s+)?(?:\d[\d.,]*\s+)?(?:more\s+)?repl(?:y|ies)"
+    r"|xem\s+(?:th\u00eam\s+)?(?:\d[\d.,]*\s+)?ph\u1ea3n\s+h\u1ed3i",
+    re.IGNORECASE,
+)
+
 #: Strip Chrome's automation banner switches. `--enable-automation` sets
 #: `navigator.webdriver` and advertises the session as automated; a session the
 #: user logged into by hand should not be announcing that on every request.
@@ -289,6 +315,102 @@ class CaptureOptions:
     max_candidates: int = MAX_CANDIDATE_POSTS
     scroll_pause_ms: int = SCROLL_PAUSE_MS
     jitter_ms: int = 900
+    #: Click "See more" so a truncated body reaches the DOM before capture.
+    expand_text: bool = True
+    max_expand_clicks: int = 12
+
+
+def _click_repeatedly(
+    page,
+    pattern: "re.Pattern[str]",
+    *,
+    max_clicks: int,
+    rng: random.Random,
+    settle_ms: int = 250,
+    on_click: Callable[[], bool] | None = None,
+) -> int:
+    """Click every visible button whose accessible name matches `pattern`.
+
+    Defensive on purpose: each click mutates the DOM, so the match set is
+    re-queried every time; every Playwright call carries an explicit short
+    timeout; a failure on one element is swallowed and the next one tried.
+
+    Only `role="button"` is clicked (D2), so an expansion click can never be
+    a link that navigates away from the page being captured.
+
+    Returns the number of clicks that landed.
+    """
+    clicks = 0
+    while clicks < max_clicks:
+        try:
+            matches = page.get_by_role("button", name=pattern)
+            total = min(matches.count(), _SCAN_LIMIT)
+        except Exception:  # noqa: BLE001 - a dead locator ends the loop
+            break
+        landed = False
+        for index in range(total):
+            element = matches.nth(index)
+            try:
+                if not element.is_visible(timeout=CLICK_TIMEOUT_MS):
+                    continue
+                element.click(timeout=CLICK_TIMEOUT_MS, no_wait_after=True)
+            except Exception:  # noqa: BLE001 - stale or covered; try the next
+                continue
+            clicks += 1
+            landed = True
+            page.wait_for_timeout(settle_ms + rng.randint(0, 200))
+            if on_click is not None and not on_click():
+                return clicks
+            break
+        if not landed:
+            break
+    return clicks
+
+
+def _same_page(current: str | None, expected: str) -> bool:
+    """True when `current` is still the page we were capturing."""
+    if not current:
+        return False
+    return current.split("#", 1)[0].rstrip("/") == expected.split("#", 1)[0].rstrip("/")
+
+
+def expand_post_text(
+    page,
+    options: CaptureOptions,
+    rng: random.Random,
+    *,
+    url: str | None = None,
+) -> int:
+    """Click the "See more" buttons on screen so full bodies reach the DOM.
+
+    The text behind "See more" is genuinely absent from the DOM until the
+    button is clicked, so this has to happen at capture time -- the parser
+    cannot recover it later.
+    """
+    if not options.expand_text or options.max_expand_clicks <= 0:
+        return 0
+    expected = url or page.url or ""
+
+    def still_here() -> bool:
+        if not expected:
+            return True
+        if _same_page(page.url, expected):
+            return True
+        # A click navigated: undo it and stop expanding rather than keep
+        # clicking on whatever page we landed on.
+        try:
+            page.go_back(timeout=5000, wait_until="domcontentloaded")
+        except Exception:  # noqa: BLE001 - best effort; the caller re-inspects
+            pass
+        return False
+
+    return _click_repeatedly(
+        page,
+        SEE_MORE_PATTERN,
+        max_clicks=options.max_expand_clicks,
+        rng=rng,
+        on_click=still_here,
+    )
 
 
 def human_scroll(page, options: CaptureOptions, rng: random.Random) -> None:
@@ -340,6 +462,9 @@ def capture_snapshots(
         first = True
 
         while time.monotonic() < deadline and not should_stop():
+            # Expand before reading the DOM: the hidden tail of a long post
+            # is not in `page.content()` until "See more" has been clicked.
+            expand_post_text(page, options, rng, url=page_url)
             html, verdict = inspect(page, page_url)
             captured_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
             db.save_snapshot(conn, run_id, page_url, captured_at, html)
@@ -358,6 +483,150 @@ def capture_snapshots(
             if len(candidates_seen) >= options.max_candidates:
                 break
             human_scroll(page, options, rng)
+
+
+DEFAULT_COMMENT_MAX_POSTS = 10
+
+
+@dataclass(frozen=True)
+class CommentOptions:
+    #: Comments wanted per post. 0 disables the pass entirely (D7).
+    top_n: int = 0
+    #: Hard ceiling on permalink navigations in one run.
+    max_posts: int = DEFAULT_COMMENT_MAX_POSTS
+    max_more_clicks: int = 6
+    max_expand_clicks: int = 20
+    #: After goto, before touching anything.
+    settle_ms: int = 2500
+    #: Between posts, jittered.
+    pause_ms: int = 2000
+    max_seconds: float = 300.0
+
+
+@dataclass(frozen=True)
+class CommentCapture:
+    """One permalink visit. `error` set means nothing was captured."""
+
+    post_id: str
+    post_url: str
+    captured_at: str | None = None
+    html: bytes | None = None
+    error: str | None = None
+
+
+def post_permalink(page_url: str, post_id: str) -> str:
+    """Fallback permalink for a post whose article carried no usable link."""
+    base = page_url.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    return f"{base}/posts/{post_id}"
+
+
+def _visible_comment_count(page) -> int:
+    """Best-effort count of comment articles currently in the DOM."""
+    try:
+        return page.locator('div[role="article"][aria-label]').count()
+    except Exception:  # noqa: BLE001 - counting must never break the pass
+        return 0
+
+
+def _expand_comments(page, options: CommentOptions, rng: random.Random) -> None:
+    """Load more comments, then un-truncate the bodies that are showing."""
+    seen = _visible_comment_count(page)
+    clicks = 0
+    while clicks < options.max_more_clicks and seen < options.top_n + 1:
+        landed = _click_repeatedly(
+            page,
+            MORE_COMMENTS_PATTERN,
+            max_clicks=1,
+            rng=rng,
+            settle_ms=900,
+        )
+        if not landed:
+            break
+        clicks += landed
+        grown = _visible_comment_count(page)
+        if grown <= seen:
+            # The click did not add anything; more clicking will not either.
+            break
+        seen = grown
+
+    # Comment bodies truncate behind the same "See more" as post bodies.
+    _click_repeatedly(
+        page,
+        SEE_MORE_PATTERN,
+        max_clicks=options.max_expand_clicks,
+        rng=rng,
+    )
+
+
+def capture_comments(
+    targets,
+    conn,
+    run_id: int,
+    config: Config,
+    options: CommentOptions | None = None,
+    should_stop: Callable[[], bool] | None = None,
+) -> Iterator[CommentCapture]:
+    """Visit each post's permalink and yield committed comment snapshots.
+
+    `targets` is `[(post_id, permalink_url), ...]`, already capped by the
+    caller. One browser session serves the whole pass (D5).
+
+    A per-post failure is *yielded* as a record with `error` set rather than
+    raised, because one bad permalink must not cost the whole pass (D6). A
+    wall is different: the snapshot commits as evidence and BlockedError
+    stops the run, exactly as the feed loop does.
+    """
+    options = options or CommentOptions()
+    should_stop = should_stop or (lambda: False)
+    targets = list(targets)
+    if options.top_n <= 0 or not targets:
+        return
+    rng = random.Random()
+
+    from . import db
+
+    with browser_session(config, quiet=True) as page:
+        deadline = time.monotonic() + options.max_seconds
+        for index, (post_id, post_url) in enumerate(targets):
+            if should_stop() or time.monotonic() >= deadline:
+                break
+            if index:
+                page.wait_for_timeout(
+                    options.pause_ms + rng.randint(0, options.pause_ms)
+                )
+            try:
+                page.goto(post_url, wait_until="domcontentloaded")
+                page.wait_for_timeout(options.settle_ms)
+            except BrowserClosedError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - one bad permalink only
+                yield CommentCapture(post_id, post_url, error=f"goto failed: {exc}")
+                continue
+
+            html, verdict = inspect(page, post_url)
+            captured_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            if verdict.blocking:
+                db.save_snapshot(conn, run_id, post_url, captured_at, html)
+                raise BlockedError(verdict)
+
+            try:
+                _expand_comments(page, options, rng)
+            except BrowserClosedError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - expansion is optional
+                yield CommentCapture(
+                    post_id, post_url, error=f"expand failed: {exc}"
+                )
+                continue
+
+            html, verdict = inspect(page, post_url)
+            captured_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            # Raw before parse: the snapshot is committed here, and the
+            # caller only ever parses bytes that are already on disk.
+            db.save_snapshot(conn, run_id, post_url, captured_at, html)
+            if verdict.blocking:
+                raise BlockedError(verdict)
+            yield CommentCapture(post_id, post_url, captured_at, html)
 
 
 def save_fixture(

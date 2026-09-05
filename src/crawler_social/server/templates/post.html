@@ -33,6 +33,30 @@
   {% endif %}
 </section>
 
+{% if comment_total %}
+<section class="panel">
+  <div class="page-head">
+    <h2>Comments <span class="secondary">({{ comment_total }})</span></h2>
+  </div>
+  <p class="muted">In the order Facebook showed them when the post was captured.</p>
+  <ol class="comment-list">
+    {% for comment in comments %}
+    <li class="comment">
+      <div class="comment-head">
+        <strong>{{ comment.author or "(unknown)" }}</strong>
+        {% if comment.published_at %}<span class="secondary">{{ comment.published_at }}</span>{% endif %}
+        {% if comment.like_count is not none %}<span class="secondary">· {{ comment.like_count }} likes</span>{% endif %}
+      </div>
+      <div class="comment-body">{{ comment.text or "(no text)" }}</div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% if comment_total > comments | length %}
+  <p class="muted">Showing the first {{ comments | length }} of {{ comment_total }}.</p>
+  {% endif %}
+</section>
+{% endif %}
+
 {% if snapshots_near %}
 <section class="panel">
   <h2>Snapshots near this post</h2>
