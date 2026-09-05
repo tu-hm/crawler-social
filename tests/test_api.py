@@ -218,3 +218,47 @@ def test_export_csv_filtered_with_header_and_disposition(client):
     data = rows[1:]
     assert len(data) == 30
     assert all(row[1] == "https://b.example" for row in data)
+
+
+# -- v3: comments ------------------------------------------------------------
+
+
+def seed_comments(db_file: Path) -> None:
+    from crawler_social import db
+
+    conn = db.connect(db_file)
+    try:
+        with db.transaction(conn):
+            db.upsert_comment(conn, "c2", "p001", "u", "Bea", "second", None, 2, 2)
+            db.upsert_comment(conn, "c1", "p001", "u", "Ann", "first", None, 9, 1)
+            db.upsert_comment(conn, "cx", "12/3%4", "u", "Cid", "escaped", None, 0, 1)
+    finally:
+        conn.close()
+
+
+def test_comments_endpoint_is_ordered_and_paged(seeded: Path):
+    from crawler_social.server.app import create_app
+
+    seed_comments(seeded)
+    client = TestClient(create_app(make_config(seeded)))
+    body = client.get("/api/posts/p001/comments").json()
+    assert body["total"] == 2
+    assert [c["comment_id"] for c in body["items"]] == ["c1", "c2"]
+    assert body["items"][0]["author"] == "Ann"
+
+
+def test_comments_route_wins_over_the_greedy_post_id_converter(seeded: Path):
+    """/posts/{post_id:path} would otherwise swallow the trailing segment."""
+    from crawler_social.server.app import create_app
+
+    seed_comments(seeded)
+    client = TestClient(create_app(make_config(seeded)))
+    resp = client.get(f"/api/posts/{quote('12/3%4', safe='')}/comments")
+    assert resp.status_code == 200
+    assert [c["comment_id"] for c in resp.json()["items"]] == ["cx"]
+
+
+def test_comments_for_a_post_without_any_are_empty_not_404(client):
+    body = client.get("/api/posts/p002/comments").json()
+    assert body == {"items": [], "total": 0, "limit": 50, "offset": 0}
+

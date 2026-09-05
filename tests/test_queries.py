@@ -252,3 +252,94 @@ def test_extended_schema_applies_twice_safely(tmp_path: Path):
         }
     assert {"idx_posts_page_url", "idx_posts_sort", "idx_snapshots_run",
             "idx_snapshots_page"} <= names
+
+
+# -- v3: comments, and reading a database an older crawler wrote -------------
+
+
+def seed_comments(path: Path) -> None:
+    conn = db.connect(path)
+    try:
+        with db.transaction(conn):
+            db.upsert_comment(conn, "c2", "p-old", "u", "Bea", "second", None, 2, 2)
+            db.upsert_comment(conn, "c1", "p-old", "u", "Ann", "first", None, 9, 1)
+            db.upsert_comment(conn, "c3", "p-mid", "u", "Cid", "other", None, 0, 1)
+    finally:
+        conn.close()
+
+
+def test_list_comments_is_ordered_by_facebooks_own_rank(db_path: Path):
+    seed_comments(db_path)
+    conn = queries.connect_ro(db_path)
+    try:
+        rows, total = queries.list_comments(conn, post_id="p-old", limit=10)
+    finally:
+        conn.close()
+    assert total == 2
+    assert [r["comment_id"] for r in rows] == ["c1", "c2"]
+    assert rows[0]["like_count"] == 9
+
+
+def test_comment_counts_are_one_query_for_many_posts(db_path: Path):
+    seed_comments(db_path)
+    conn = queries.connect_ro(db_path)
+    try:
+        counts = queries.comment_counts(conn, ["p-old", "p-mid", "p-new"])
+    finally:
+        conn.close()
+    assert counts["p-old"] == 2
+    assert counts["p-mid"] == 1
+    assert counts.get("p-new", 0) == 0
+
+
+def test_summary_counts_comments(db_path: Path):
+    seed_comments(db_path)
+    conn = queries.connect_ro(db_path)
+    try:
+        assert queries.summary(conn)["total_comments"] == 3
+    finally:
+        conn.close()
+
+
+def test_the_viewer_reads_a_database_written_before_v3(tmp_path: Path):
+    """The viewer opens the file read-only, so it can never migrate it."""
+    path = tmp_path / "old.db"
+    with sqlite3.connect(path) as c:
+        c.executescript(
+            """
+            CREATE TABLE posts (
+                post_id TEXT PRIMARY KEY, page_url TEXT NOT NULL, text TEXT,
+                author TEXT, published_at TEXT, first_seen TEXT NOT NULL,
+                last_seen TEXT NOT NULL
+            );
+            CREATE TABLE runs (
+                id INTEGER PRIMARY KEY, started_at TEXT NOT NULL,
+                finished_at TEXT, status TEXT NOT NULL, error TEXT
+            );
+            CREATE TABLE snapshots (
+                id INTEGER PRIMARY KEY, run_id INTEGER, page_url TEXT NOT NULL,
+                captured_at TEXT NOT NULL, html BLOB NOT NULL,
+                sha256 TEXT NOT NULL, size_bytes INTEGER NOT NULL
+            );
+            CREATE TABLE state (
+                page_url TEXT PRIMARY KEY, last_post_id TEXT,
+                last_post_time TEXT, updated_at TEXT NOT NULL
+            );
+            INSERT INTO posts VALUES ('p1','https://a.example','t',NULL,NULL,
+                '2026-01-01T00:00:00+00:00','2026-01-01T00:00:00+00:00');
+            """
+        )
+    conn = queries.connect_ro(path)
+    try:
+        rows, total = queries.list_posts(conn, limit=10)
+        assert total == 1
+        assert "post_url" not in rows[0]
+        assert queries.get_post(conn, "p1") is not None
+        # The comments table does not exist; asking for comments is empty,
+        # not an error.
+        assert queries.list_comments(conn, post_id="p1", limit=10) == ([], 0)
+        assert queries.comment_counts(conn, ["p1"]) == {}
+        assert queries.summary(conn)["total_comments"] == 0
+    finally:
+        conn.close()
+

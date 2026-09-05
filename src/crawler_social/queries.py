@@ -24,8 +24,13 @@ MAX_PAGE_SIZE = 200
 #: is a bug and the UI says so instead of pretending it is "completed".
 RUN_STATUSES = frozenset({"running", "completed", "failed", "interrupted"})
 
-_POST_COLUMNS = (
+_BASE_POST_COLUMNS = (
     "post_id, page_url, text, author, published_at, first_seen, last_seen"
+)
+
+_COMMENT_COLUMNS = (
+    "comment_id, post_id, page_url, author, text, published_at, "
+    "like_count, rank_index, first_seen, last_seen"
 )
 
 
@@ -53,6 +58,27 @@ def connect_ro(path: Path) -> sqlite3.Connection:
     # fails instead of touching the file.
     conn.execute("PRAGMA query_only=ON")
     return conn
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _post_columns(conn: sqlite3.Connection) -> str:
+    """Post columns this database actually has.
+
+    `posts.post_url` and the `comments` table arrived in v3, and the viewer
+    opens the file read-only -- it cannot run the migration itself. A
+    database written by an older crawler is read without the newer parts
+    instead of failing, and picks them up the next time a crawl runs.
+    """
+    if "post_url" in _table_columns(conn, "posts"):
+        return _BASE_POST_COLUMNS + ", post_url"
+    return _BASE_POST_COLUMNS
+
+
+def _has_comments(conn: sqlite3.Connection) -> bool:
+    return bool(_table_columns(conn, "comments"))
 
 
 def _clamp(limit: int, offset: int) -> tuple[int, int]:
@@ -105,7 +131,7 @@ def list_posts(
     )
     direction = "ASC" if order == "oldest" else "DESC"
     rows = conn.execute(
-        f"SELECT {_POST_COLUMNS} FROM posts{where_sql} "
+        f"SELECT {_post_columns(conn)} FROM posts{where_sql} "
         f"ORDER BY COALESCE(published_at, last_seen) {direction} "
         f"LIMIT ? OFFSET ?",
         [*params, *_clamp(limit, offset)],
@@ -115,9 +141,47 @@ def list_posts(
 
 def get_post(conn: sqlite3.Connection, post_id: str) -> Optional[dict]:
     row = conn.execute(
-        f"SELECT {_POST_COLUMNS} FROM posts WHERE post_id = ?", (post_id,)
+        f"SELECT {_post_columns(conn)} FROM posts WHERE post_id = ?", (post_id,)
     ).fetchone()
     return dict(row) if row is not None else None
+
+
+def list_comments(
+    conn: sqlite3.Connection,
+    *,
+    post_id: str,
+    limit: int,
+    offset: int = 0,
+) -> tuple[list[dict], int]:
+    """One post's stored comments in Facebook's own order, top first."""
+    if not _has_comments(conn):
+        return [], 0
+    total = int(
+        conn.execute(
+            "SELECT COUNT(*) FROM comments WHERE post_id = ?", (post_id,)
+        ).fetchone()[0]
+    )
+    rows = conn.execute(
+        f"SELECT {_COMMENT_COLUMNS} FROM comments WHERE post_id = ?"
+        " ORDER BY rank_index ASC, comment_id ASC LIMIT ? OFFSET ?",
+        (post_id, *_clamp(limit, offset)),
+    ).fetchall()
+    return _rows_to_dicts(rows), total
+
+
+def comment_counts(
+    conn: sqlite3.Connection, post_ids: list[str]
+) -> dict[str, int]:
+    """Comment counts for a batch of posts -- one query, not N."""
+    if not post_ids or not _has_comments(conn):
+        return {}
+    placeholders = ", ".join("?" * len(post_ids))
+    rows = conn.execute(
+        f"SELECT post_id, COUNT(*) FROM comments WHERE post_id IN ({placeholders})"
+        " GROUP BY post_id",
+        post_ids,
+    ).fetchall()
+    return {row[0]: int(row[1]) for row in rows}
 
 
 def list_pages(conn: sqlite3.Connection) -> list[dict]:
@@ -226,7 +290,7 @@ def post_neighbors(
 
     def neighbor(op: str, direction: str) -> Optional[dict]:
         row = conn.execute(
-            f"SELECT {_POST_COLUMNS} FROM posts"
+            f"SELECT {_post_columns(conn)} FROM posts"
             f" WHERE COALESCE(published_at, last_seen) {op} ?"
             f"    OR (COALESCE(published_at, last_seen) = ? AND post_id {op} ?)"
             f" ORDER BY COALESCE(published_at, last_seen) {direction},"
@@ -289,7 +353,7 @@ def posts_first_seen_between(
         conn.execute(f"SELECT COUNT(*) FROM posts WHERE {where}", params).fetchone()[0]
     )
     rows = conn.execute(
-        f"SELECT {_POST_COLUMNS} FROM posts WHERE {where}"
+        f"SELECT {_post_columns(conn)} FROM posts WHERE {where}"
         f" ORDER BY first_seen DESC LIMIT ?",
         [*params, _clamp(limit, 0)[0]],
     ).fetchall()
@@ -320,10 +384,16 @@ def summary(conn: sqlite3.Connection) -> dict:
     snapshot_bytes = int(
         conn.execute("SELECT COALESCE(SUM(length(html)), 0) FROM snapshots").fetchone()[0]
     )
+    total_comments = (
+        int(conn.execute("SELECT COUNT(*) FROM comments").fetchone()[0])
+        if _has_comments(conn)
+        else 0
+    )
     return {
         "total_posts": posts,
         "total_snapshots": snapshots,
         "total_runs": runs,
+        "total_comments": total_comments,
         "last_run": dict(last_run) if last_run is not None else None,
         "newest_post_at": newest_post,
         "total_snapshot_bytes": snapshot_bytes,

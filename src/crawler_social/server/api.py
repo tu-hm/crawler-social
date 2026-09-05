@@ -36,6 +36,21 @@ class PostOut(BaseModel):
     published_at: Optional[str] = None
     first_seen: str
     last_seen: str
+    #: Absent from rows written before the v3 migration.
+    post_url: Optional[str] = None
+
+
+class CommentOut(BaseModel):
+    comment_id: str
+    post_id: str
+    page_url: str
+    author: Optional[str] = None
+    text: Optional[str] = None
+    published_at: Optional[str] = None
+    like_count: Optional[int] = None
+    rank_index: int
+    first_seen: str
+    last_seen: str
 
 
 class RunInfo(BaseModel):
@@ -80,6 +95,7 @@ class SummaryOut(BaseModel):
     total_posts: int
     total_snapshots: int
     total_runs: int
+    total_comments: int = 0
     last_run: Optional[RunInfo] = None
     newest_post_at: Optional[str] = None
     total_snapshot_bytes: int
@@ -136,6 +152,21 @@ def list_posts(
         since=since,
         until=until,
         order=order,
+    )
+    return Page(items=rows, total=total, limit=limit, offset=offset)
+
+
+@router.get("/posts/{post_id:path}/comments", response_model=Page[CommentOut])
+def list_comments(
+    conn: Conn,
+    post_id: str,
+    limit: Annotated[int, Query(ge=1, le=queries.MAX_PAGE_SIZE)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> Page[CommentOut]:
+    # Registered before /posts/{post_id:path}: the :path converter is greedy
+    # and would otherwise swallow the trailing /comments as part of the id.
+    rows, total = queries.list_comments(
+        conn, post_id=post_id, limit=limit, offset=offset
     )
     return Page(items=rows, total=total, limit=limit, offset=offset)
 

@@ -216,3 +216,57 @@ def test_invalid_html_params_fall_back_instead_of_422(client: TestClient):
     resp = client.get("/posts", params={"limit": "banana"})
     assert resp.status_code == 200
     assert "30 posts" in resp.text
+
+
+# -- v3: the comments panel on a post's detail page -------------------------
+
+
+def test_post_detail_shows_stored_comments_in_rank_order(db_file: Path):
+    from crawler_social import db
+    from crawler_social.server.app import create_app
+
+    make_db(db_file, posts=_seed_posts())
+    conn = db.connect(db_file)
+    try:
+        with db.transaction(conn):
+            db.upsert_comment(
+                conn, "c2", "post-000", "u", "Bea", "later reply", None, 2, 2
+            )
+            db.upsert_comment(
+                conn, "c1", "post-000", "u", "Ann", "top reply", None, 9, 1
+            )
+    finally:
+        conn.close()
+
+    client = TestClient(create_app(make_config(db_file)))
+    page = client.get("/posts/post-000").text
+    assert "Comments" in page
+    assert page.index("top reply") < page.index("later reply")
+    assert "Ann" in page and "9 likes" in page
+
+
+def test_post_detail_hides_the_panel_when_there_are_no_comments(client: TestClient):
+    page = client.get("/posts/post-001").text
+    assert "comment-list" not in page
+
+
+def test_post_detail_escapes_comment_text(db_file: Path):
+    from crawler_social import db
+    from crawler_social.server.app import create_app
+
+    make_db(db_file, posts=_seed_posts())
+    conn = db.connect(db_file)
+    try:
+        with db.transaction(conn):
+            db.upsert_comment(
+                conn, "c1", "post-000", "u", "<script>x</script>",
+                "<img src=x onerror=alert(1)>", None, None, 1,
+            )
+    finally:
+        conn.close()
+
+    client = TestClient(create_app(make_config(db_file)))
+    page = client.get("/posts/post-000").text
+    assert "<script>x</script>" not in page
+    assert "onerror=alert(1)&gt;" in page or "&lt;img src=x" in page
+

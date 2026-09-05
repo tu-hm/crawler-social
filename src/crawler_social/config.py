@@ -15,6 +15,9 @@ gitignored `.env` file next to the project root. Supports:
   loopback only unless told otherwise)
 - CRAWLER_SERVE_PORT (default 8765)
 - CRAWLER_SERVE_TOKEN (unset by default; required for non-loopback binds)
+- CRAWLER_TOP_COMMENTS (0 = off; comments wanted per post)
+- CRAWLER_COMMENTS_MAX_POSTS (ceiling on permalink visits per run)
+- CRAWLER_EXPAND_TEXT ("1"/"0"; click "See more" before capture)
 """
 
 from __future__ import annotations
@@ -30,6 +33,8 @@ ATTACH_MODES = ("launch", "cdp")
 DEFAULT_CDP_URL = "http://127.0.0.1:9222"
 DEFAULT_SERVE_HOST = "127.0.0.1"
 DEFAULT_SERVE_PORT = 8765
+DEFAULT_TOP_COMMENTS = 0
+DEFAULT_COMMENTS_MAX_POSTS = 10
 
 
 @dataclass(frozen=True)
@@ -45,6 +50,28 @@ class Config:
     serve_host: str = DEFAULT_SERVE_HOST
     serve_port: int = DEFAULT_SERVE_PORT
     serve_token: str | None = None
+    #: Comments to collect per post; 0 keeps the comment pass off (v3 D7).
+    top_comments: int = DEFAULT_TOP_COMMENTS
+    comments_max_posts: int = DEFAULT_COMMENTS_MAX_POSTS
+    expand_text: bool = True
+
+
+def _bool_env(value: str | None, default: bool) -> bool:
+    if value is None or not value.strip():
+        return default
+    return value.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _int_env(value: str | None, default: int, name: str, *, minimum: int = 0) -> int:
+    if value is None or not value.strip():
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise ValueError(f"{name} must be an integer; got {value!r}.") from None
+    if parsed < minimum:
+        raise ValueError(f"{name} must be >= {minimum}; got {parsed}.")
+    return parsed
 
 
 def _load_dotenv(path: Path) -> dict[str, str]:
@@ -106,4 +133,16 @@ def load_config(env: dict[str, str] | None = None) -> Config:
         serve_host=env.get("CRAWLER_SERVE_HOST") or DEFAULT_SERVE_HOST,
         serve_port=serve_port,
         serve_token=env.get("CRAWLER_SERVE_TOKEN") or None,
+        top_comments=_int_env(
+            env.get("CRAWLER_TOP_COMMENTS"),
+            DEFAULT_TOP_COMMENTS,
+            "CRAWLER_TOP_COMMENTS",
+        ),
+        comments_max_posts=_int_env(
+            env.get("CRAWLER_COMMENTS_MAX_POSTS"),
+            DEFAULT_COMMENTS_MAX_POSTS,
+            "CRAWLER_COMMENTS_MAX_POSTS",
+            minimum=1,
+        ),
+        expand_text=_bool_env(env.get("CRAWLER_EXPAND_TEXT"), True),
     )
