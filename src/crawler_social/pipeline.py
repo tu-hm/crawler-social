@@ -33,6 +33,10 @@ class RunSummary:
     existing_posts: int
     errors: int
     diagnostics: list[str]
+    #: Set when Facebook served a wall instead of content: the verdict kind
+    #: ("login_wall", "checkpoint", "rate_limited", "unavailable").
+    blocked: Optional[str] = None
+    blocked_message: Optional[str] = None
 
 
 class _StopRequest:
@@ -85,61 +89,73 @@ def run_crawl(page_url: str, limit: int, config: Config) -> RunSummary:
         consecutive_known = 0
         limit_reached = False
         first_snapshot: Optional[tuple[str, bytes]] = None
+        blocked: Optional[facebook.BlockedError] = None
 
-        for captured_at, html in facebook.capture_snapshots(
-            page_url,
-            conn,
-            run_id,
-            config,
-            should_stop=lambda: stop.requested,
-        ):
-            summary.snapshots_captured += 1
-            summary.snapshots_total += 1
-            if first_snapshot is None:
-                first_snapshot = (captured_at, html)
-                facebook.save_fixture(
+        # A wall stops capture but must not discard posts already parsed from
+        # earlier, legitimate snapshots -- so it is caught around the loop and
+        # the commit below still runs.
+        try:
+            for captured_at, html in facebook.capture_snapshots(
+                page_url,
+                conn,
+                run_id,
+                config,
+                should_stop=lambda: stop.requested,
+            ):
+                summary.snapshots_captured += 1
+                summary.snapshots_total += 1
+                if first_snapshot is None:
+                    first_snapshot = (captured_at, html)
+                    facebook.save_fixture(
+                        html,
+                        page_url,
+                        captured_at,
+                        "chrome",
+                        config.db_path.parent / "fixtures",
+                    )
+
+                posts, diagnostics = parse(
                     html,
                     page_url,
-                    captured_at,
-                    "chrome",
-                    config.db_path.parent / "fixtures",
+                    datetime.now(timezone.utc),
                 )
+                for diag in diagnostics:
+                    summary.diagnostics.append(f"{diag.reason}: {diag.context}")
+                summary.errors += len(diagnostics)
 
-            posts, diagnostics = parse(
-                html,
-                page_url,
-                datetime.now(timezone.utc),
+                for post in posts:
+                    if post.post_id in seen_in_run:
+                        continue
+                    seen_in_run.add(post.post_id)
+                    known = db.has_post(conn, post.post_id)
+                    pinned = (post.text or "").lower().startswith("pinned")
+                    if known:
+                        summary.existing_posts += 1
+                        if not pinned:
+                            consecutive_known += 1
+                    else:
+                        summary.new_posts += 1
+                        consecutive_known = 0
+                    pending_posts.append(
+                        (post, known)
+                    )
+                    if summary.new_posts >= limit:
+                        limit_reached = True
+                        break
+                    if consecutive_known >= CONSECUTIVE_KNOWN_STOP:
+                        break
+                if limit_reached or consecutive_known >= CONSECUTIVE_KNOWN_STOP:
+                    break
+                if stop.requested:
+                    status = "interrupted"
+                    break
+        except facebook.BlockedError as exc:
+            blocked = exc
+            summary.blocked = exc.verdict.kind
+            summary.blocked_message = exc.verdict.message
+            summary.diagnostics.append(
+                f"{exc.verdict.kind}: {exc.verdict.reason}"
             )
-            for diag in diagnostics:
-                summary.diagnostics.append(f"{diag.reason}: {diag.context}")
-            summary.errors += len(diagnostics)
-
-            for post in posts:
-                if post.post_id in seen_in_run:
-                    continue
-                seen_in_run.add(post.post_id)
-                known = db.has_post(conn, post.post_id)
-                pinned = (post.text or "").lower().startswith("pinned")
-                if known:
-                    summary.existing_posts += 1
-                    if not pinned:
-                        consecutive_known += 1
-                else:
-                    summary.new_posts += 1
-                    consecutive_known = 0
-                pending_posts.append(
-                    (post, known)
-                )
-                if summary.new_posts >= limit:
-                    limit_reached = True
-                    break
-                if consecutive_known >= CONSECUTIVE_KNOWN_STOP:
-                    break
-            if limit_reached or consecutive_known >= CONSECUTIVE_KNOWN_STOP:
-                break
-            if stop.requested:
-                status = "interrupted"
-                break
 
         if stop.requested and status != "interrupted":
             status = "interrupted"
@@ -155,9 +171,16 @@ def run_crawl(page_url: str, limit: int, config: Config) -> RunSummary:
                     post.author,
                     post.published_at,
                 )
-            if pending_posts:
+            # A blocked run saw an incomplete feed, so its newest post is not
+            # a trustworthy watermark. Store the posts, hold the state.
+            if pending_posts and blocked is None:
                 newest = pending_posts[0][0]
                 db.set_state(conn, page_url, newest.post_id, newest.published_at)
+
+        if blocked is not None:
+            status = "failed"
+            error_text = f"blocked:{blocked.verdict.kind}: {blocked}"
+            summary.errors += 1
     except KeyboardInterrupt:
         status = "interrupted"
         error_text = "interrupted by signal"
@@ -175,6 +198,6 @@ def run_crawl(page_url: str, limit: int, config: Config) -> RunSummary:
         conn.close()
 
     summary.status = status
-    if status == "failed":
+    if status == "failed" and summary.blocked is None:
         raise facebook.CaptureError(error_text or "crawl failed")
     return summary
