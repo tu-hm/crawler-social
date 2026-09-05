@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Posts — crawler-social{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Posts</h1>
+  {% if csv_url %}<a class="button" href="{{ csv_url }}">Download CSV</a>{% endif %}
+</div>
+
+<form class="filter-bar" method="get" action="/posts" data-auto>
+  <input type="search" name="q" value="{{ q }}" placeholder="Search post text…" aria-label="Search post text">
+  <select name="page_url" aria-label="Page" data-auto>
+    <option value="">All pages</option>
+    {% for page in pages %}
+    <option value="{{ page.page_url }}"{% if page_url == page.page_url %} selected{% endif %}>{{ page.page_url }}</option>
+    {% endfor %}
+  </select>
+  <input type="date" name="since" value="{{ since_input }}" aria-label="Since">
+  <input type="date" name="until" value="{{ until_input }}" aria-label="Until">
+  <select name="order" aria-label="Order" data-auto>
+    <option value="newest"{% if order == "newest" %} selected{% endif %}>Newest first</option>
+    <option value="oldest"{% if order == "oldest" %} selected{% endif %}>Oldest first</option>
+  </select>
+  <button type="submit">Filter</button>
+  {% if has_filters %}<a class="button" href="{{ clear_url }}">Clear</a>{% endif %}
+</form>
+
+{% if chips %}
+<div class="active-filters" aria-label="Active filters">
+  {% for chip in chips %}
+  <span class="filter-chip">{{ chip.label }}<a href="{{ chip.remove_url }}" title="Remove this filter" aria-label="Remove filter {{ chip.label }}">×</a></span>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if rows %}
+<p class="result-count">{{ total }} post{% if total != 1 %}s{% endif %}</p>
+<div class="table-scroll">
+<table class="data-table posts-table">
+  <thead>
+    <tr>
+      <th scope="col">Published (UTC)</th>
+      <th scope="col">Author</th>
+      <th scope="col">Text</th>
+      {% if multiple_pages %}<th scope="col">Page</th>{% endif %}
+      <th scope="col">First seen</th>
+      <th scope="col">Last seen</th>
+      <th scope="col"><span class="visually-hidden">Open</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td class="col-when" title="{{ row.when_age }}">{{ row.published_at or "—" }}</td>
+      <td class="col-author">{{ row.author or "—" }}</td>
+      <td class="col-text"><a class="post-link excerpt" href="{{ row.url }}">{{ row.text_html }}</a></td>
+      {% if multiple_pages %}<td class="col-page">{{ row.page_url }}</td>{% endif %}
+      <td class="col-seen">{{ row.first_seen }}</td>
+      <td class="col-seen">{{ row.last_seen }}</td>
+      <td class="col-open"><a class="button" href="{{ row.url }}">View →</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% include "partials/pagination.html" %}
+{% elif no_matches %}
+<section class="empty-state">
+  <p>No posts match these filters.</p>
+  <p><a class="button" href="{{ clear_url }}">Clear filters</a></p>
+</section>
+{% else %}
+{% include "partials/empty_state.html" %}
+{% endif %}
+
+<form class="page-size-form" method="get" action="/posts" data-auto>
+  <input type="hidden" name="q" value="{{ q }}">
+  <input type="hidden" name="page_url" value="{{ page_url }}">
+  <input type="hidden" name="since" value="{{ since_input }}">
+  <input type="hidden" name="until" value="{{ until_input }}">
+  <input type="hidden" name="order" value="{{ order }}">
+  <label for="page-size">Per page</label>
+  <select id="page-size" name="limit" data-auto>
+    {% for size in page_sizes %}
+    <option value="{{ size }}"{% if size == limit %} selected{% endif %}>{{ size }}</option>
+    {% endfor %}
+  </select>
+  <noscript><button type="submit">Apply</button></noscript>
+</form>
+{% endblock %}

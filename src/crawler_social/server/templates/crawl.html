@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Crawl — crawler-social{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Crawl</h1>
+</div>
+
+{% if not gui_ready %}
+<p class="warning">
+  No graphical session detected (DISPLAY and WAYLAND_DISPLAY are empty).
+  Crawling opens a real browser window and needs a logged-in desktop
+  session — start the server from your own desktop, not over SSH.
+</p>
+{% endif %}
+{% if status.lock_busy %}
+<p class="warning">
+  Another crawler process holds the profile lock. A crawl started from a
+  terminal may already be running; this page will show its run once it
+  commits.
+</p>
+{% endif %}
+{% if reason %}
+<p class="warning">{{ reason }}</p>
+{% endif %}
+
+{% if status.running %}
+<section class="panel">
+  <h2>Crawl running</h2>
+  <p data-crawl-status>Running {{ status.page_url }} for {{ status.elapsed_seconds }}s…</p>
+  <pre class="source-view" id="crawl-output">{% for line in status.lines %}{{ line }}
+{% endfor %}</pre>
+  {% if status.lines_dropped %}
+  <p class="muted">{{ status.lines_dropped }} earlier lines dropped from the live view.</p>
+  {% endif %}
+  {% if status.stop_requested %}
+  <p class="muted">A graceful stop was requested — waiting for the crawl to wrap up.</p>
+  {% endif %}
+  <form method="post" action="/crawl/stop">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="button button-primary" type="submit">Stop crawl</button>
+  </form>
+</section>
+{% else %}
+<form class="filter-bar" method="post" action="/crawl">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <label>
+    Page URL
+    <input type="url" name="page_url" value="{{ page_url_value }}" list="known-pages" required placeholder="https://www.facebook.com/YourPage">
+  </label>
+  <datalist id="known-pages">
+    {% for page in pages %}
+    <option value="{{ page.page_url }}"></option>
+    {% endfor %}
+  </datalist>
+  <label>
+    New-post limit
+    <input type="number" name="limit" value="{{ limit_value }}" min="1" max="500">
+  </label>
+  <button class="button button-primary" type="submit">Crawl now</button>
+</form>
+{% endif %}
+
+{% if not status.running and status.exit_code is not none %}
+<section class="panel">
+  <h2>Last crawl from this page</h2>
+  <p>
+    Finished with exit code
+    <span class="badge {{ 'badge-completed' if status.exit_code == 0 else 'badge-failed' }}">{{ status.exit_code }}</span>
+    {% if status.page_url %}<span class="muted">for {{ status.page_url }}</span>{% endif %}
+  </p>
+  {% if status.lines %}
+  <pre class="source-view">{% for line in status.lines %}{{ line }}
+{% endfor %}</pre>
+  {% endif %}
+  {% if last_run %}
+  <p><a href="/runs/{{ last_run.id }}">See run #{{ last_run.id }} in /runs</a> — the posts list now shows what it stored.</p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

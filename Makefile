@@ -1,4 +1,4 @@
-.PHONY: test install login session crawl chrome-cdp posts clean
+.PHONY: test install login session crawl chrome-cdp posts serve serve-check test-server clean
 
 # Run tests first by default.
 LIMIT ?= 10
@@ -30,6 +30,19 @@ crawl: test
 
 posts:
 	uv run crawler posts --limit $(LIMIT)
+
+# Local, read-only web viewer on http://127.0.0.1:8765
+serve:
+	uv run crawler serve
+
+# The verification gate (plans/v2/10): every registered route smoke-tested,
+# so a new route cannot ship without one.
+test-server:
+	uv run pytest tests/test_smoke_routes.py
+
+# Start the viewer only after the whole suite is green.
+serve-check: test
+	uv run crawler serve
 
 clean:
 	rm -rf .pytest_cache data/fixtures

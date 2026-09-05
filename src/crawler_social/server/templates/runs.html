@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Runs — crawler-social{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Runs</h1>
+  <a class="button" href="/state">Watermarks (/state)</a>
+</div>
+
+{% if rows %}
+<div class="table-scroll">
+<table class="data-table">
+  <thead>
+    <tr>
+      <th scope="col" class="num">ID</th>
+      <th scope="col">Started (UTC)</th>
+      <th scope="col">Finished (UTC)</th>
+      <th scope="col">Duration</th>
+      <th scope="col">Status</th>
+      <th scope="col" class="num">Snapshots</th>
+      <th scope="col">Error</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for run in rows %}
+    <tr>
+      <td class="num"><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+      <td class="col-when" title="{{ run.started_age }}">{{ run.started_at }}</td>
+      <td class="col-when">{{ run.finished_at or "—" }}</td>
+      <td class="num">{{ run.duration_text or "—" }}</td>
+      <td>
+        {% if run.status_ok %}
+        <span class="badge badge-{{ run.status }}"{% if run.stale %} title="No finished time after more than an hour — this run almost certainly died."{% endif %}>{{ run.status }}{% if run.stale %} (stale){% endif %}</span>
+        {% else %}
+        <span class="badge badge-unknown" title="Not one of running/completed/failed/interrupted — the schema CHECK should make this impossible.">unknown status: {{ run.status }}</span>
+        {% endif %}
+      </td>
+      <td class="num">{{ run.snapshot_count }}</td>
+      <td class="col-error">{{ run.error | excerpt(120) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if any_stale %}
+<p class="notice">
+  A run marked <strong>running (stale)</strong> started more than an hour ago
+  and never recorded a finish — it almost certainly died without updating its
+  row. The viewer never rewrites rows, so the status is left as stored.
+</p>
+{% endif %}
+{% include "partials/pagination.html" %}
+{% else %}
+<section class="empty-state">
+  <p>No runs stored yet.</p>
+  <p><code class="command">uv run crawler crawl &lt;page-url&gt;</code></p>
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Post {{ post.post_id }} — crawler-social{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Post <span class="mono">{{ post.post_id }}</span></h1>
+  <a class="button" href="/posts">← All posts</a>
+</div>
+
+<div class="detail-grid">
+  <dt>Post ID</dt>
+  <dd class="mono">{{ post.post_id }}</dd>
+  <dt>Page</dt>
+  <dd><a href="/posts?page_url={{ page_url_q }}">{{ post.page_url }}</a></dd>
+  <dt>Author</dt>
+  <dd>{{ post.author or "(none)" }}</dd>
+  <dt>Published (UTC)</dt>
+  <dd>{{ post.published_at or "(none)" }}</dd>
+  <dt>First seen</dt>
+  <dd>{{ post.first_seen }} <span class="secondary">({{ first_seen_age }})</span></dd>
+  <dt>Last seen</dt>
+  <dd>{{ post.last_seen }} <span class="secondary">({{ last_seen_age }})</span></dd>
+</div>
+
+<section class="panel">
+  <div class="page-head">
+    <h2>Text</h2>
+    {% if post.text %}<button class="button" type="button" data-copy-target="#post-text">Copy text</button>{% endif %}
+  </div>
+  {% if post.text %}
+  <pre class="post-text" id="post-text">{{ post.text }}</pre>
+  {% else %}
+  <p class="muted">(none)</p>
+  {% endif %}
+</section>
+
+{% if snapshots_near %}
+<section class="panel">
+  <h2>Snapshots near this post</h2>
+  <p class="muted">Captures of the same page, closest in time to this post.</p>
+  <ul class="snapshot-links">
+    {% for snapshot in snapshots_near %}
+    <li>
+      <a href="/snapshots/{{ snapshot.id }}">#{{ snapshot.id }}</a>
+      — captured {{ snapshot.captured_at }}
+      <span class="secondary">({{ snapshot.size_bytes | bytes }})</span>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<nav class="pager" aria-label="Adjacent posts">
+  {% if prev_url %}
+  <a class="button" href="{{ prev_url }}">← Previous</a>
+  {% else %}
+  <span class="button disabled">← Previous</span>
+  {% endif %}
+  {% if next_url %}
+  <a class="button" href="{{ next_url }}">Next →</a>
+  {% else %}
+  <span class="button disabled">Next →</span>
+  {% endif %}
+</nav>
+{% endblock %}

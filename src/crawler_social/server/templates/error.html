@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}{{ title or "Error" }} — crawler-social{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ title or "Error" }}</h1>
+</div>
+<section class="panel">
+  {% if message %}<p>{{ message }}</p>{% endif %}
+  {% if request_id %}
+  <p>Quote this request id if you report the problem:</p>
+  <p class="mono"><code>{{ request_id }}</code></p>
+  {% endif %}
+  <p><a href="/">Back to overview</a></p>
+</section>
+{% endblock %}

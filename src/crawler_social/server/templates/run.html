@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Run #{{ run.id }} — crawler-social{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Run #{{ run.id }}</h1>
+  <a class="button" href="/runs">← All runs</a>
+</div>
+
+<div class="detail-grid">
+  <dt>Status</dt>
+  <dd>
+    {% if run.status_ok %}
+    <span class="badge badge-{{ run.status }}"{% if run.stale %} title="No finished time after more than an hour — this run almost certainly died."{% endif %}>{{ run.status }}{% if run.stale %} (stale){% endif %}</span>
+    {% else %}
+    <span class="badge badge-unknown">unknown status: {{ run.status }}</span>
+    {% endif %}
+  </dd>
+  <dt>Started (UTC)</dt>
+  <dd>{{ run.started_at }} <span class="secondary">({{ run.started_age }})</span></dd>
+  <dt>Finished (UTC)</dt>
+  <dd>{{ run.finished_at or "—" }}</dd>
+  <dt>Duration</dt>
+  <dd>{{ run.duration_text or "—" }}</dd>
+  <dt>Snapshots captured</dt>
+  <dd>{{ run.snapshot_count }}</dd>
+  <dt>Error</dt>
+  <dd>{% if run.error %}<pre class="post-text error-text">{{ run.error }}</pre>{% else %}<span class="muted">(none)</span>{% endif %}</dd>
+</div>
+
+<section class="panel">
+  <h2>Snapshots ({{ snapshots | length }})</h2>
+  {% if snapshots %}
+  <ul class="snapshot-links">
+    {% for snapshot in snapshots %}
+    <li>
+      <a href="/snapshots/{{ snapshot.id }}">#{{ snapshot.id }}</a>
+      — {{ snapshot.page_url }} at {{ snapshot.captured_at }}
+      <span class="secondary">({{ snapshot.size_bytes | bytes }})</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No snapshots in this run.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Approximate yield: {{ yield_total }} post{% if yield_total != 1 %}s{% endif %}</h2>
+  <p class="muted">
+    Posts whose <code>first_seen</code> falls between this run's start and
+    finish. This is approximate: posts carry no run reference, so the window
+    is the only link between them.
+  </p>
+  {% if yield_posts %}
+  <table class="data-table">
+    <thead>
+      <tr><th>First seen</th><th>Author</th><th>Text</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for post in yield_posts %}
+      <tr>
+        <td class="col-when">{{ post.first_seen }}</td>
+        <td>{{ post.author or "—" }}</td>
+        <td class="post-cell"><span class="excerpt">{{ post.text | excerpt }}</span></td>
+        <td><a class="button" href="{{ post.url }}">View →</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if yield_truncated %}
+  <p class="muted">Showing the {{ yield_posts | length }} most recent of {{ yield_total }}.</p>
+  {% endif %}
+  {% else %}
+  <p class="muted">No posts were first seen during this window.</p>
+  {% endif %}
+</section>
+{% endblock %}

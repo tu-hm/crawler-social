@@ -46,6 +46,55 @@ as evidence, leaves the watermark untouched, and exits `3` with the remedy. See
 [plans/v1/07-session-and-access.md](./plans/v1/07-session-and-access.md) for the full
 rationale, the pacing budgets, and the back-off ladder.
 
+## Web viewer (plans/v2)
+
+The crawler stores everything in one SQLite database, and a small web UI lets you browse
+it without the terminal:
+
+```console
+uv run crawler serve          # http://127.0.0.1:8765
+```
+
+- **Loopback and read-only by default.** The server binds `127.0.0.1`, every request
+  opens its own read-only SQLite connection, and no route creates or migrates anything.
+  The one deliberate exception is the "Crawl now" button on `/crawl`, which spawns the
+  same `crawler crawl` subprocess you would otherwise run by hand.
+- **Non-loopback binds are refused** unless you pass `--allow-remote` *and* set
+  `CRAWLER_SERVE_TOKEN` (at least 32 characters). With a token configured, every request
+  must present it — once, as `?token=…` or `Authorization: Bearer`, after which an
+  HttpOnly `SameSite=Strict` cookie keeps you signed in; `/healthz` stays open for
+  supervisor probes. A remote bind means your crawl data leaves the machine over plain
+  HTTP; an SSH tunnel to a loopback server is the safer way to browse it from elsewhere.
+- **Snapshot HTML is never trusted.** Captured Facebook markup is rendered inside a
+  sandboxed iframe and served with a `default-src 'none'` CSP; the app's own pages carry
+  a strict CSP with no inline script or style, and error pages expose nothing but a
+  request id.
+
+The HTML pages and the JSON API under `/api` share one parameter vocabulary (`q`,
+`page_url`, `since`, `until`, `order`, `limit`, `offset`), so a UI URL differs from an
+API URL only by its path, and `/api/export/posts.csv` streams the current filter's full
+result set.
+
+### A short tour
+
+- **Overview (`/`)** — totals, a health panel (last run status and age, posts added in
+  the last 24 hours and 7 days, database size), a posts-per-day chart for the last 30
+  days, and the newest posts.
+- **Posts (`/posts`)** — search, filter by page and date range, sort, page size, and a
+  CSV export of the current filter. Each row links to the post's detail page.
+- **Post detail (`/posts/<id>`)** — all stored fields, previous/next navigation in the
+  current sort order, and the snapshots in which that post was seen.
+- **Snapshots (`/snapshots`)** — every captured page with its run, size, and checksum.
+  Each snapshot opens three ways: a sandboxed preview iframe, an escaped source view
+  with line numbers, and a read-only reparse view that re-runs the parser on the stored
+  HTML without touching the database.
+- **Runs and state (`/runs`, `/state`)** — each crawl run's status, duration, snapshots,
+  and *approximate* yield (posts carry no run foreign key, and the UI says so), plus the
+  watermark table that decides where the next crawl stops.
+- **Crawl (`/crawl`)** — the "Crawl now" button, live output, and a stop control. It
+  works only on a desktop session with a visible browser, and refuses a second crawl
+  while one is running.
+
 ## Legacy multi-source design
 
 A personal ingestion tool that pulls one person's social and messaging activity into SQLite
