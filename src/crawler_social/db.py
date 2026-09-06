@@ -1,8 +1,10 @@
 """Database access for crawler-social.
 
-All timestamps are explicit UTC ISO-8601 strings. Raw snapshots commit
+All timestamps are explicit UTC ISO-8601 strings. Snapshot records commit
 immediately in their own transaction; post upserts and state updates commit
 together in a second transaction so state never advances past committed posts.
+A snapshot row is capture metadata only: the page markup is never stored,
+because the text parsed out of it is what this project is for.
 """
 
 from __future__ import annotations
@@ -30,7 +32,14 @@ def connect(path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(SCHEMA_SQL)
     _migrate_columns(conn)
+    dropped = _drop_snapshot_html(conn)
     conn.commit()
+    if dropped:
+        # The blob column is gone but its pages are still in the file;
+        # VACUUM is what hands them back, and it cannot run in a
+        # transaction. This happens once, on the first connect after the
+        # upgrade.
+        conn.execute("VACUUM")
     return conn
 
 
@@ -40,7 +49,61 @@ def connect(path: Path) -> sqlite3.Connection:
 #: rewrites or drops, so it is safe to run on every connect.
 _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("posts", "post_url", "ALTER TABLE posts ADD COLUMN post_url TEXT"),
+    (
+        "snapshots",
+        "size_bytes",
+        "ALTER TABLE snapshots ADD COLUMN size_bytes INTEGER",
+    ),
 )
+
+
+def _snapshot_columns(conn: sqlite3.Connection) -> list[str]:
+    return [row[1] for row in conn.execute("PRAGMA table_info(snapshots)")]
+
+
+def _drop_snapshot_html(conn: sqlite3.Connection) -> bool:
+    """Remove the legacy `html` column, keeping every snapshot row.
+
+    Databases written while markup was still stored carry megabytes per
+    capture in a column nothing reads any more. Rebuilding the table
+    without it -- rather than DROP COLUMN -- copies only the metadata, so
+    the blobs are never rewritten on the way out. Returns True when the
+    rebuild ran, which tells connect() to VACUUM.
+    """
+    columns = _snapshot_columns(conn)
+    if "html" not in columns:
+        return False
+    size = "COALESCE(size_bytes, length(html))" if "size_bytes" in columns else "length(html)"
+    # The rebuild drops a table another table's foreign keys point at, so
+    # enforcement goes off for the duration and the result is checked.
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        with transaction(conn):
+            conn.execute(
+                """
+                CREATE TABLE snapshots_new (
+                    id           INTEGER PRIMARY KEY,
+                    run_id       INTEGER NOT NULL REFERENCES runs(id),
+                    page_url     TEXT NOT NULL,
+                    captured_at  TEXT NOT NULL,
+                    sha256       TEXT NOT NULL UNIQUE,
+                    size_bytes   INTEGER
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO snapshots_new"
+                " (id, run_id, page_url, captured_at, sha256, size_bytes)"
+                f" SELECT id, run_id, page_url, captured_at, sha256, {size}"
+                " FROM snapshots"
+            )
+            conn.execute("DROP TABLE snapshots")
+            conn.execute("ALTER TABLE snapshots_new RENAME TO snapshots")
+            # The old table's indexes went with it.
+            conn.executescript(SCHEMA_SQL)
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+    return True
 
 
 def _migrate_columns(conn: sqlite3.Connection) -> list[str]:
@@ -54,6 +117,14 @@ def _migrate_columns(conn: sqlite3.Connection) -> list[str]:
             continue
         conn.execute(statement)
         applied.append(f"{table}.{column}")
+    if "snapshots.size_bytes" in applied and "html" in _snapshot_columns(conn):
+        # A database written before this column carries each capture's size
+        # only in the blob about to be dropped; copy it across first so the
+        # viewer keeps reporting what was fetched.
+        conn.execute(
+            "UPDATE snapshots SET size_bytes = length(html)"
+            " WHERE size_bytes IS NULL"
+        )
     return applied
 
 
@@ -100,16 +171,24 @@ def save_snapshot(
     captured_at: str,
     html: bytes,
 ) -> bool:
-    """Commit one raw snapshot immediately. Returns True when stored."""
+    """Commit one snapshot record immediately. Returns True when recorded.
+
+    The row is capture metadata: run, page, time, sha256, and how many
+    bytes came back. `html` is read, never written -- it is hashed and
+    measured, then the caller parses it in memory and only the text it
+    yields is stored. A second capture of an unchanged page hashes the
+    same and is dropped here, which is what makes repeat runs cheap.
+    """
     import hashlib
 
     sha = hashlib.sha256(html).hexdigest()
     try:
         with transaction(conn):
             conn.execute(
-                "INSERT INTO snapshots (run_id, page_url, captured_at, sha256, html)"
+                "INSERT INTO snapshots"
+                " (run_id, page_url, captured_at, sha256, size_bytes)"
                 " VALUES (?, ?, ?, ?, ?)",
-                (run_id, page_url, captured_at, sha, sqlite3.Binary(html)),
+                (run_id, page_url, captured_at, sha, len(html)),
             )
     except sqlite3.IntegrityError:
         return False

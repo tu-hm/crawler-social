@@ -19,7 +19,6 @@ Two ways to reach a logged-in session, chosen by ``CRAWLER_ATTACH_MODE``:
 
 from __future__ import annotations
 
-import json
 import random
 import re
 import shutil
@@ -527,7 +526,9 @@ def capture_snapshots(
     Each snapshot is committed through save_snapshot() immediately after
     capture -- never deferred to the final scroll, because virtualized feeds
     may remove earlier DOM nodes. A snapshot that turns out to be a wall is
-    still committed first, as evidence, and then stops the run.
+    still committed first, as evidence, and then stops the run. What is
+    committed is the capture's metadata; the markup itself is never stored,
+    and reaches the caller in memory only, which is what the parser reads.
     """
     options = options or CaptureOptions()
     should_stop = should_stop or (lambda: False)
@@ -706,38 +707,9 @@ def capture_comments(
 
             html, verdict = inspect(page, post_url)
             captured_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            # Raw before parse: the snapshot is committed here, and the
-            # caller only ever parses bytes that are already on disk.
+            # Record before parse: the capture is on the run's books here,
+            # and only then does the caller parse the bytes.
             db.save_snapshot(conn, run_id, post_url, captured_at, html)
             if verdict.blocking:
                 raise BlockedError(verdict)
             yield CommentCapture(post_id, post_url, captured_at, html)
-
-
-def save_fixture(
-    html: bytes,
-    page_url: str,
-    captured_at: str,
-    browser: str,
-    fixtures_dir: Path,
-) -> Path:
-    """Save a small non-private HTML fixture and metadata sidecar."""
-    fixtures_dir = Path(fixtures_dir)
-    fixtures_dir.mkdir(parents=True, exist_ok=True)
-    slug = re.sub(r"[^a-z0-9]+", "-", page_url.lower()).strip("-")[:60]
-    stem = f"{slug}_{captured_at.replace(':', '').replace('+', 'p')}"
-    html_path = fixtures_dir / f"{stem}.html"
-    meta_path = fixtures_dir / f"{stem}.meta.json"
-    html_path.write_bytes(html)
-    meta_path.write_text(
-        json.dumps(
-            {
-                "page_url": page_url,
-                "captured_at": captured_at,
-                "browser": browser,
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    return html_path

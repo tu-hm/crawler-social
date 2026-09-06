@@ -372,8 +372,9 @@ def parse(
 # Comment markup is the most obfuscated part of a Facebook page and the part
 # most likely to change. Everything below is deliberately best-effort: a
 # node that yields nothing becomes a Diagnostic rather than an exception,
-# and the permalink snapshot stays in the database so an improved parser can
-# be re-run over the same bytes from /snapshots/{id}/reparse.
+# so a comment this parser cannot read costs one diagnostic and not the
+# post it hangs under. Captures are not stored, so an improved parser
+# applies to the next crawl, never to an old one.
 
 #: A comment's container is `role="article"` like a post's; only the
 #: aria-label tells them apart.

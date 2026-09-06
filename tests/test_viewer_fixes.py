@@ -357,9 +357,9 @@ def test_a_genuinely_missing_address_is_still_a_404(tmp_path: Path):
     assert client.get("/snapshots/1").status_code == 404
 
 
-def test_reparse_survives_an_unreadable_capture_time(db_file: Path):
-    # datetime.fromisoformat on a bad stored value took the whole page
-    # down with a 500; it now reparses and says the timestamp is unusable.
+def test_snapshot_page_survives_an_unreadable_capture_time(db_file: Path):
+    # A stored value datetime.fromisoformat cannot read used to take the
+    # page down with a 500. The snapshot page renders it as stored.
     import sqlite3
 
     client = build(
@@ -374,12 +374,9 @@ def test_reparse_survives_an_unreadable_capture_time(db_file: Path):
     conn.commit()
     conn.close()
 
-    resp = client.get("/snapshots/1/reparse")
+    resp = client.get("/snapshots/1")
     assert resp.status_code == 200
-    assert "not an ISO-8601 timestamp" in resp.text
-    # The metadata and source views were already tolerant; keep them so.
-    assert client.get("/snapshots/1").status_code == 200
-    assert client.get("/snapshots/1/source").status_code == 200
+    assert "not-a-date" in resp.text
 
 
 # -- HTTP method handling ---------------------------------------------------
@@ -389,11 +386,9 @@ def test_reparse_survives_an_unreadable_capture_time(db_file: Path):
     "path",
     [
         "/healthz", "/", "/posts", "/posts/p1", "/runs", "/runs/1",
-        "/snapshots", "/snapshots/1", "/snapshots/1/source",
-        "/snapshots/1/reparse", "/state", "/crawl",
+        "/snapshots", "/snapshots/1", "/state", "/crawl",
         "/api/summary", "/api/posts", "/api/posts/p1", "/api/runs",
-        "/api/runs/1", "/api/snapshots", "/api/snapshots/1/raw",
-        "/api/snapshots/1/download", "/api/state", "/api/pages",
+        "/api/runs/1", "/api/snapshots", "/api/state", "/api/pages",
         "/api/crawl/status", "/api/export/posts.csv",
     ],
 )
@@ -410,12 +405,3 @@ def test_post_only_routes_still_refuse_head(client: TestClient):
     # has a GET route as well, so HEAD there is a 200 on purpose.)
     assert client.head("/crawl/stop").status_code == 405
     assert client.head("/crawl").status_code == 200
-
-
-def test_head_keeps_the_snapshot_routes_own_strict_csp(client: TestClient):
-    # The untrusted snapshot blob must not inherit the permissive app CSP.
-    for method in (client.get, client.head):
-        resp = method("/api/snapshots/1/raw")
-        csp = resp.headers["content-security-policy"]
-        assert csp == "default-src 'none'; style-src 'unsafe-inline'"
-        assert resp.headers["x-frame-options"] == "SAMEORIGIN"

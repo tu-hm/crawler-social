@@ -32,7 +32,8 @@ def make_db(
 
     posts:   (post_id, page_url, text, author, published_at, first_seen[, last_seen])
     runs:    (started_at, status, finished_at, error)
-    snapshots: (run_index, page_url, captured_at, html)
+    snapshots: (run_index, page_url, captured_at, html). The html is
+               measured and hashed, as a real capture's is, not stored.
     states:  (page_url, last_post_id, last_post_time, updated_at)
     """
     conn = db.connect(path)

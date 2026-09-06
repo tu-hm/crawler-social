@@ -63,11 +63,6 @@ def fake_capture(conn, snapshots, fail_after=None):
     return capture
 
 
-@pytest.fixture(autouse=True)
-def no_fixture_writes(monkeypatch, tmp_path):
-    monkeypatch.setattr(facebook, "save_fixture", lambda *a, **k: None)
-
-
 def post_ids_in_db(conn):
     return [r[0] for r in conn.execute("SELECT post_id FROM posts ORDER BY post_id")]
 

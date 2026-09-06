@@ -66,7 +66,11 @@ def crawl(
         help='Click "See more" so long post bodies are captured in full.',
     ),
 ) -> None:
-    """Capture raw HTML snapshots of the Page, then parse and store posts."""
+    """Capture the Page, parse it, and store the posts it yields.
+
+    Captured markup is never written to disk: it is hashed, measured, and
+    parsed in memory, and the text is what the database keeps.
+    """
     from .pipeline import run_crawl
 
     config = load_config()

@@ -189,13 +189,6 @@ def test_run_id_filter_on_snapshots(client):
     assert body["items"][0]["run_id"] == 2
 
 
-def test_raw_returns_exact_bytes(client):
-    resp = client.get("/api/snapshots/1/raw")
-    assert resp.status_code == 200
-    assert resp.content == b"<html>a</html>"
-    assert client.get("/api/snapshots/99/raw").status_code == 404
-
-
 def test_state_endpoint(client):
     state = client.get("/api/state").json()
     assert len(state) == 1

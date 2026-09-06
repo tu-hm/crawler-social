@@ -7,9 +7,9 @@ Two jobs:
    assertion at the bottom means a new route cannot be added without
    passing through this smoke walk.
 2. A fixture-backed end-to-end path with no browser and no network: the
-   sample HTML is parsed, stored through `db.py`, served, and the posts
-   must appear on `/posts`, on their detail pages, and in the snapshot's
-   reparse view.
+   sample HTML is parsed, its text stored through `db.py`, and the posts
+   must appear on `/posts` and on their detail pages. The markup itself is
+   never stored, so the database is checked to be sure it holds none.
 """
 
 from __future__ import annotations
@@ -164,15 +164,9 @@ def test_fixture_snapshot_end_to_end(db_file: Path):
         first_sentence = (post.text or "").split(".")[0]
         assert first_sentence in detail.text
 
-    reparse = client.get("/snapshots/1/reparse")
-    assert reparse.status_code == 200
-    assert "Posts found: 5" in reparse.text
-    for post in posts:
-        assert post.post_id in reparse.text
-
-    raw = client.get("/api/snapshots/1/raw")
-    assert raw.status_code == 200
-    assert raw.content == raw_html, "the raw route must serve the stored bytes"
+    snapshot = client.get("/snapshots/1")
+    assert snapshot.status_code == 200
+    assert str(len(raw_html))[:2] in snapshot.text or "KB" in snapshot.text
 
     # The write path through db.py leaves a healthy database behind.
     ro = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True)

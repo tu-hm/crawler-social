@@ -81,15 +81,12 @@ def run(config, capture, comments_stub, *, top_comments=3, limit=20):
         with unittest.mock.patch.object(
             facebook, "capture_comments", comments_stub
         ):
-            with unittest.mock.patch.object(
-                facebook, "save_fixture", lambda *a, **k: None
-            ):
-                return pipeline.run_crawl(
-                    PAGE_URL,
-                    limit=limit,
-                    config=config,
-                    top_comments=top_comments,
-                )
+            return pipeline.run_crawl(
+                PAGE_URL,
+                limit=limit,
+                config=config,
+                top_comments=top_comments,
+            )
 
 
 def stored_comments(db_path: Path) -> list[tuple]:
@@ -134,16 +131,13 @@ def test_max_posts_caps_the_permalink_visits(tmp_path):
         facebook, "capture_snapshots", fake_capture([page_html("1", "2", "3", "4")])
     ):
         with unittest.mock.patch.object(facebook, "capture_comments", comments):
-            with unittest.mock.patch.object(
-                facebook, "save_fixture", lambda *a, **k: None
-            ):
-                pipeline.run_crawl(
-                    PAGE_URL,
-                    limit=20,
-                    config=config,
-                    top_comments=2,
-                    comments_max_posts=2,
-                )
+            pipeline.run_crawl(
+                PAGE_URL,
+                limit=20,
+                config=config,
+                top_comments=2,
+                comments_max_posts=2,
+            )
     assert len(comments.seen) == 2
 
 

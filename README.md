@@ -1,8 +1,9 @@
 # crawler-social
 
 > **Start with [SIMPLE_PLAN.md](./SIMPLE_PLAN.md).** It defines the intentionally small
-> first version: one public Facebook Page, one SQLite database, raw HTML, five parsed
-> fields, and two CLI commands. The larger documents below are reference material for
+> first version: one public Facebook Page, one SQLite database, five parsed fields, and
+> two CLI commands. (One thing has since moved on: captures are parsed for their text
+> and their markup discarded — see "What a crawl keeps" below.) The larger documents below are reference material for
 > later expansion, not prerequisites for starting implementation. The active v1 supports
 > both macOS and desktop Linux; follow the ordered files in
 > [plans/v1/](./plans/v1/README.md).
@@ -41,10 +42,30 @@ make chrome-cdp          # your Chrome, with --remote-debugging-port=9222
 CRAWLER_ATTACH_MODE=cdp uv run crawler crawl "https://www.facebook.com/<page>"
 ```
 
-A crawl that meets a login wall, checkpoint, or rate limit stores the offending snapshot
+A crawl that meets a login wall, checkpoint, or rate limit records the offending snapshot
 as evidence, leaves the watermark untouched, and exits `3` with the remedy. See
 [plans/v1/07-session-and-access.md](./plans/v1/07-session-and-access.md) for the full
 rationale, the pacing budgets, and the back-off ladder.
+
+## What a crawl keeps
+
+A crawl stores **text, not pages**. Page markup is never written anywhere: a
+capture is hashed and measured on the way past, the parser reads it in memory,
+and what lands in the database is the text — the posts, and their top comments
+when you ask for them — plus one `snapshots` row per capture recording run,
+page, capture time, byte size, and SHA-256. One Facebook page load is several
+megabytes; fifty of them grew the database past 300 MB with nothing in it you
+could search.
+
+The checksum is over the captured bytes, so a re-capture of an unchanged page
+is still recognised and skipped, and a login wall still lands as evidence on
+the run. What is gone is any way to re-read a capture after the fact: a parser
+fix applies to the next crawl, not to old ones.
+
+Databases written when markup was still stored migrate themselves on the next
+open — the `html` column is dropped, each snapshot's size is preserved, and the
+file is VACUUMed back down. Every post, comment, run, and snapshot row
+survives.
 
 ## Web viewer (plans/v2)
 
@@ -65,10 +86,10 @@ uv run crawler serve          # http://127.0.0.1:8765
   HttpOnly `SameSite=Strict` cookie keeps you signed in; `/healthz` stays open for
   supervisor probes. A remote bind means your crawl data leaves the machine over plain
   HTTP; an SSH tunnel to a loopback server is the safer way to browse it from elsewhere.
-- **Snapshot HTML is never trusted.** Captured Facebook markup is rendered inside a
-  sandboxed iframe and served with a `default-src 'none'` CSP; the app's own pages carry
-  a strict CSP with no inline script or style, and error pages expose nothing but a
-  request id.
+- **No captured markup is ever served.** The viewer has no route that renders Facebook
+  HTML, because none is stored; the app's own pages carry a strict CSP with no inline
+  script or style, stored post and comment text is escaped, and error pages expose
+  nothing but a request id.
 
 The HTML pages and the JSON API under `/api` share one parameter vocabulary (`q`,
 `page_url`, `since`, `until`, `order`, `limit`, `offset`), so a UI URL differs from an
@@ -85,9 +106,8 @@ result set.
 - **Post detail (`/posts/<id>`)** — all stored fields, previous/next navigation in the
   current sort order, and the snapshots in which that post was seen.
 - **Snapshots (`/snapshots`)** — every captured page with its run, size, and checksum.
-  Each snapshot opens three ways: a sandboxed preview iframe, an escaped source view
-  with line numbers, and a read-only reparse view that re-runs the parser on the stored
-  HTML without touching the database.
+  A snapshot is a record that a page was fetched, not a copy of it, so its detail page
+  links to the posts parsed from that page rather than to the markup.
 - **Runs and state (`/runs`, `/state`)** — each crawl run's status, duration, snapshots,
   and *approximate* yield (posts carry no run foreign key, and the UI says so), plus the
   watermark table that decides where the next crawl stops.

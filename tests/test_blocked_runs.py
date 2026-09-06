@@ -6,6 +6,7 @@ time budget, stores snapshots with no posts, and reports success.
 
 from __future__ import annotations
 
+import hashlib
 import unittest.mock
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,8 +64,7 @@ def capture_then_block(snapshots: list[bytes], wall_html: bytes):
 
 def run(config, capture, limit=20):
     with unittest.mock.patch.object(facebook, "capture_snapshots", capture):
-        with unittest.mock.patch.object(facebook, "save_fixture", lambda *a, **k: None):
-            return pipeline.run_crawl(PAGE_URL, limit=limit, config=config)
+        return pipeline.run_crawl(PAGE_URL, limit=limit, config=config)
 
 
 def test_immediate_login_wall_does_not_raise_and_reports_blocked(tmp_path):
@@ -76,12 +76,19 @@ def test_immediate_login_wall_does_not_raise_and_reports_blocked(tmp_path):
 
 
 def test_wall_snapshot_is_committed_as_evidence(tmp_path):
+    """The wall is on the run's books even though its markup is not kept."""
     config = make_config(tmp_path)
     run(config, capture_then_block([], LOGIN_WALL_HTML))
     conn = db.connect(config.db_path)
-    stored = conn.execute("SELECT html FROM snapshots").fetchall()
-    assert [row[0] for row in stored] == [LOGIN_WALL_HTML]
+    stored = conn.execute(
+        "SELECT page_url, size_bytes, sha256 FROM snapshots"
+    ).fetchall()
     conn.close()
+    assert len(stored) == 1
+    page_url, size, sha = stored[0]
+    assert page_url == PAGE_URL
+    assert size == len(LOGIN_WALL_HTML)
+    assert sha == hashlib.sha256(LOGIN_WALL_HTML).hexdigest()
 
 
 def test_blocked_run_holds_the_watermark(tmp_path):

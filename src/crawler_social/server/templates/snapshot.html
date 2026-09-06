@@ -4,9 +4,7 @@
 <div class="page-head">
   <h1>Snapshot #{{ snapshot.id }}</h1>
   <div>
-    <a class="button" href="{{ source_url }}">Source view</a>
-    <a class="button" href="{{ reparse_url }}">Reparse</a>
-    <a class="button" href="{{ download_url }}">Download</a>
+    <a class="button" href="{{ posts_url }}">Posts from this page</a>
   </div>
 </div>
 
@@ -17,20 +15,15 @@
   <dd>{{ snapshot.page_url }}</dd>
   <dt>Captured (UTC)</dt>
   <dd>{{ snapshot.captured_at }}</dd>
-  <dt>Size</dt>
+  <dt>Captured size</dt>
   <dd>{{ snapshot.size_bytes | bytes }}</dd>
   <dt>SHA-256</dt>
   <dd class="mono">{{ snapshot.sha256 }}</dd>
 </dl>
 
 <p class="notice">
-  The preview below is fully sandboxed: the captured page runs no scripts,
-  loads no resources, and cannot touch this app's origin.
+  A snapshot is the record of one page load: what was fetched, when, and how
+  big it was. The page markup is not stored — the text parsed out of it is,
+  as the posts linked above.
 </p>
-<iframe class="snapshot-frame"
-        src="{{ preview_url }}"
-        sandbox=""
-        referrerpolicy="no-referrer"
-        loading="lazy"
-        title="Sandboxed snapshot preview"></iframe>
 {% endblock %}

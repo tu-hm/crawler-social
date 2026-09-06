@@ -71,6 +71,7 @@ class SnapshotOut(BaseModel):
     page_url: str
     captured_at: str
     sha256: str
+    #: Bytes fetched. The markup itself is not kept -- see the posts.
     size_bytes: int
 
 
@@ -235,45 +236,6 @@ def list_snapshots(
         conn, run_id=run_id, page_url=page_url, limit=limit, offset=offset
     )
     return Page(items=rows, total=total, limit=limit, offset=offset)
-
-
-@router.get("/snapshots/{snapshot_id}/raw")
-def get_snapshot_raw(conn: Conn, snapshot_id: int) -> Response:
-    html = queries.get_snapshot_html(conn, snapshot_id)
-    if html is None:
-        raise HTTPException(status_code=404, detail="snapshot_not_found")
-    # Snapshot HTML is untrusted third-party markup. These headers strip it
-    # of scripts, images, frames, and network fetches before it is ever
-    # rendered (plans/v2/06); the iframe that shows it is sandboxed too.
-    return Response(
-        content=html,
-        media_type="text/html; charset=utf-8",
-        headers={
-            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
-            "X-Content-Type-Options": "nosniff",
-            "X-Frame-Options": "SAMEORIGIN",
-            "Referrer-Policy": "no-referrer",
-            "Cache-Control": "no-store",
-        },
-    )
-
-
-@router.get("/snapshots/{snapshot_id}/download")
-def download_snapshot(conn: Conn, snapshot_id: int) -> Response:
-    snapshot = queries.get_snapshot(conn, snapshot_id)
-    if snapshot is None:
-        raise HTTPException(status_code=404, detail="snapshot_not_found")
-    html = queries.get_snapshot_html(conn, snapshot_id)
-    filename = f"snapshot-{snapshot_id}-{snapshot['sha256'][:12]}.html"
-    return Response(
-        content=html,
-        media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "X-Content-Type-Options": "nosniff",
-            "Cache-Control": "no-store",
-        },
-    )
 
 
 @router.get("/state", response_model=list[StateOut])

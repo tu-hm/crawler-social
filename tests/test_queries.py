@@ -182,7 +182,7 @@ def test_list_snapshots_metadata_only(ro):
     for row in rows:
         assert "html" not in row
         assert set(row) == {
-            "id", "run_id", "page_url", "captured_at", "sha256", "size_bytes"
+            "id", "run_id", "page_url", "captured_at", "sha256", "size_bytes",
         }
 
 
@@ -194,10 +194,11 @@ def test_list_snapshots_filters(ro):
     assert total == 1
 
 
-def test_get_snapshot_html_exact_bytes(ro):
-    html = queries.get_snapshot_html(ro, 1)
-    assert html == b"<html>a1</html>"
-    assert queries.get_snapshot_html(ro, 99) is None
+def test_no_query_reads_page_markup(ro):
+    """Nothing stores it, so nothing may claim to read it back."""
+    assert not hasattr(queries, "get_snapshot_html")
+    assert queries.get_snapshot(ro, 1)["size_bytes"] == len(b"<html>a1</html>")
+    assert queries.get_snapshot(ro, 99) is None
 
 
 def test_get_state_rows(ro):

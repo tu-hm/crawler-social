@@ -81,6 +81,22 @@ def _has_comments(conn: sqlite3.Connection) -> bool:
     return bool(_table_columns(conn, "comments"))
 
 
+def _snapshot_size(conn: sqlite3.Connection) -> str:
+    """SQL for a snapshot's captured size, in bytes.
+
+    Current databases record it in `size_bytes`. One written before that
+    column existed only has the markup it used to store, and the read-only
+    viewer never migrates -- so measure the old blob where that is all
+    there is.
+    """
+    columns = _table_columns(conn, "snapshots")
+    if "size_bytes" not in columns:
+        return "length(html)"
+    if "html" in columns:
+        return "COALESCE(size_bytes, length(html))"
+    return "size_bytes"
+
+
 def _clamp(limit: int, offset: int) -> tuple[int, int]:
     return max(1, min(int(limit), MAX_PAGE_SIZE)), max(0, int(offset))
 
@@ -233,7 +249,7 @@ def list_snapshots(
     limit: int,
     offset: int = 0,
 ) -> tuple[list[dict], int]:
-    """Snapshot metadata only -- the html blob never leaves a list view."""
+    """Snapshots for a list view: metadata is all a snapshot has."""
     where: list[str] = []
     params: list[object] = []
     if run_id is not None:
@@ -250,29 +266,19 @@ def list_snapshots(
         ).fetchone()[0]
     )
     rows = conn.execute(
-        "SELECT id, run_id, page_url, captured_at, sha256, "
-        "length(html) AS size_bytes"
+        f"SELECT id, run_id, page_url, captured_at, sha256,"
+        f" {_snapshot_size(conn)} AS size_bytes"
         f" FROM snapshots{where_sql} ORDER BY id DESC LIMIT ? OFFSET ?",
         [*params, *_clamp(limit, offset)],
     ).fetchall()
     return _rows_to_dicts(rows), total
 
 
-def get_snapshot_html(conn: sqlite3.Connection, snapshot_id: int) -> Optional[bytes]:
-    """The one function that reads the blob."""
-    row = conn.execute(
-        "SELECT html FROM snapshots WHERE id = ?", (snapshot_id,)
-    ).fetchone()
-    if row is None:
-        return None
-    return bytes(row[0])
-
-
 def get_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> Optional[dict]:
-    """Metadata for one snapshot; the blob itself is not selected."""
+    """Metadata for one snapshot -- what a capture leaves behind."""
     row = conn.execute(
-        "SELECT id, run_id, page_url, captured_at, sha256,"
-        " length(html) AS size_bytes FROM snapshots WHERE id = ?",
+        f"SELECT id, run_id, page_url, captured_at, sha256,"
+        f" {_snapshot_size(conn)} AS size_bytes FROM snapshots WHERE id = ?",
         (snapshot_id,),
     ).fetchone()
     return dict(row) if row is not None else None
@@ -314,8 +320,8 @@ def snapshots_near_post(
     """Snapshots of the same page, closest in capture time to the post."""
     reference = post.get("published_at") or post.get("last_seen")
     rows = conn.execute(
-        "SELECT id, run_id, page_url, captured_at,"
-        " length(html) AS size_bytes"
+        f"SELECT id, run_id, page_url, captured_at,"
+        f" {_snapshot_size(conn)} AS size_bytes"
         " FROM snapshots WHERE page_url = ?"
         " ORDER BY ABS(julianday(captured_at) - julianday(?)) ASC, id DESC"
         " LIMIT ?",
@@ -388,7 +394,9 @@ def summary(conn: sqlite3.Connection) -> dict:
         "SELECT MAX(COALESCE(published_at, last_seen)) FROM posts"
     ).fetchone()[0]
     snapshot_bytes = int(
-        conn.execute("SELECT COALESCE(SUM(length(html)), 0) FROM snapshots").fetchone()[0]
+        conn.execute(
+            f"SELECT COALESCE(SUM({_snapshot_size(conn)}), 0) FROM snapshots"
+        ).fetchone()[0]
     )
     total_comments = (
         int(conn.execute("SELECT COUNT(*) FROM comments").fetchone()[0])

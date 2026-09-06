@@ -138,8 +138,6 @@ def create_app(config: Config) -> FastAPI:
         run_detail,
         runs_list,
         snapshot_detail,
-        snapshot_reparse,
-        snapshot_source,
         snapshots_list,
         state_view,
     )
@@ -160,8 +158,6 @@ def create_app(config: Config) -> FastAPI:
     app.get("/posts/{post_id:path}", response_model=None)(post_detail)
     app.get("/snapshots", response_model=None)(snapshots_list)
     app.get("/snapshots/{snapshot_id}", response_model=None)(snapshot_detail)
-    app.get("/snapshots/{snapshot_id}/source", response_model=None)(snapshot_source)
-    app.get("/snapshots/{snapshot_id}/reparse", response_model=None)(snapshot_reparse)
     app.get("/runs", response_model=None)(runs_list)
     app.get("/runs/{run_id}", response_model=None)(run_detail)
     app.get("/state", response_model=None)(state_view)

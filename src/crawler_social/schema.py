@@ -9,13 +9,18 @@ CREATE TABLE IF NOT EXISTS runs (
     error        TEXT
 );
 
+-- Capture metadata for one page load: what was fetched, when, and how big
+-- it was. The markup itself is never stored -- a single feed capture is
+-- several megabytes -- so what a crawl keeps out of it is the text, in
+-- posts and comments. sha256 is over the captured bytes, which is what
+-- makes a re-capture of an unchanged page recognisable.
 CREATE TABLE IF NOT EXISTS snapshots (
     id           INTEGER PRIMARY KEY,
     run_id       INTEGER NOT NULL REFERENCES runs(id),
     page_url     TEXT NOT NULL,
     captured_at  TEXT NOT NULL,
     sha256       TEXT NOT NULL UNIQUE,
-    html         BLOB NOT NULL
+    size_bytes   INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS posts (

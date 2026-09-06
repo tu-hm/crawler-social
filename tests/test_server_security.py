@@ -20,7 +20,6 @@ from tests.conftest import make_db
 
 TOKEN = "a" * 40
 SHORT_TOKEN = "abcdefghij"
-RAW_SNAPSHOT_CSP = "default-src 'none'; style-src 'unsafe-inline'"
 
 HTML_ROUTES = ["/", "/posts", "/snapshots", "/runs", "/state", "/crawl"]
 
@@ -33,8 +32,6 @@ ALL_GET_ROUTES = [
     "/posts?q=hello",
     "/snapshots",
     "/snapshots/1",
-    "/snapshots/1/source",
-    "/snapshots/1/reparse",
     "/runs",
     "/runs/1",
     "/state",
@@ -46,8 +43,6 @@ ALL_GET_ROUTES = [
     "/api/runs",
     "/api/runs/1",
     "/api/snapshots",
-    "/api/snapshots/1/raw",
-    "/api/snapshots/1/download",
     "/api/state",
     "/api/crawl/status",
     "/api/export/posts.csv",
@@ -238,23 +233,11 @@ def test_html_responses_carry_security_headers(seeded):
         assert resp.headers["x-frame-options"] == "DENY", path
 
 
-def test_raw_snapshot_keeps_its_own_csp(seeded):
-    client = client_for(seeded)
-    resp = client.get("/api/snapshots/1/raw")
-    assert resp.status_code == 200
-    csp = resp.headers["content-security-policy"]
-    assert csp == RAW_SNAPSHOT_CSP
-    assert csp != APP_CSP
-    assert resp.headers["x-frame-options"] == "SAMEORIGIN"
-
-
 def test_no_inline_script_or_style_on_any_page(seeded):
     client = client_for(seeded)
     pages = HTML_ROUTES + [
         "/posts/p1",
         "/snapshots/1",
-        "/snapshots/1/source",
-        "/snapshots/1/reparse",
         "/runs/1",
     ]
     for path in pages:

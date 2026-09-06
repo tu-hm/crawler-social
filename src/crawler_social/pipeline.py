@@ -1,7 +1,8 @@
 """Crawl pipeline: capture snapshots, parse, commit posts and state atomically.
 
 Rules enforced here:
-- raw HTML commits before parsing touches it;
+- the snapshot record commits before parsing touches the capture (the markup
+  is never stored -- the text parsed out of it is);
 - parsed posts and state commit together in one transaction;
 - state never advances past committed posts;
 - --limit is a hard ceiling on newly emitted posts.
@@ -209,7 +210,6 @@ def run_crawl(
         seen_in_run: set[str] = set()
         consecutive_known = 0
         limit_reached = False
-        first_snapshot: Optional[tuple[str, bytes]] = None
         blocked: Optional[facebook.BlockedError] = None
 
         # A wall stops capture but must not discard posts already parsed from
@@ -226,15 +226,6 @@ def run_crawl(
             ):
                 summary.snapshots_captured += 1
                 summary.snapshots_total += 1
-                if first_snapshot is None:
-                    first_snapshot = (captured_at, html)
-                    facebook.save_fixture(
-                        html,
-                        page_url,
-                        captured_at,
-                        "chrome",
-                        config.db_path.parent / "fixtures",
-                    )
 
                 posts, diagnostics = parse(
                     html,

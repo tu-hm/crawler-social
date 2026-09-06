@@ -19,7 +19,6 @@ from fastapi.responses import RedirectResponse
 from .. import __version__, queries
 from ..facebook import check_gui_session
 from ..queries import DatabaseMissingError
-from ..parser import parse as parse_captured_html
 from .format import duration, highlight, relative_age, run_is_stale, snippet
 from .jobs import JobRefused, crawl_job
 from .params import normalize_when
@@ -30,7 +29,6 @@ templates = create_templates()
 PAGE_SIZES = (25, 50, 100, 200)
 DEFAULT_PAGE_SIZE = 50
 #: Source views stop at 2 MB so one huge snapshot cannot hang the browser.
-SOURCE_VIEW_MAX_BYTES = 2 * 1024 * 1024
 #: A run still marked "running" after this long is shown as stale.
 STALE_RUN_AFTER = timedelta(hours=1)
 #: The newest post being older than this usually means the parser broke.
@@ -439,14 +437,8 @@ def snapshots_list(request: Request):
     return render(request, "snapshots.html", context)
 
 
-def _snapshot_context(
-    request: Request, snapshot_id: str, *, with_blob: bool = False
-):
-    """(snapshot, blob-or-None, base context) or None for an unknown id.
-
-    The blob is only read when with_blob is set, so metadata pages never
-    touch it.
-    """
+def _snapshot_context(request: Request, snapshot_id: str):
+    """(snapshot, base context), or None for an unknown id."""
     numeric = _int_or_none(snapshot_id)
     if numeric is None:
         return None
@@ -456,111 +448,25 @@ def _snapshot_context(
     try:
         snapshot = queries.get_snapshot(conn, numeric)
         context = base_context(request, conn)
-        blob = (
-            queries.get_snapshot_html(conn, numeric)
-            if with_blob and snapshot is not None
-            else None
-        )
     finally:
         conn.close()
     if snapshot is None:
         return None
-    return snapshot, blob, context
+    return snapshot, context
 
 
 def snapshot_detail(request: Request, snapshot_id: str):
     loaded = _snapshot_context(request, snapshot_id)
     if loaded is None:
         return render(request, "404.html", {}, status_code=404)
-    snapshot, _blob, context = loaded
+    snapshot, context = loaded
     context.update(
         nav="snapshots",
         snapshot=snapshot,
         sha12=snapshot["sha256"][:12],
-        # The iframe is the only thing that ever renders the blob, and it
-        # is fully sandboxed: no scripts, no same-origin, nothing.
-        preview_url=f"/api/snapshots/{snapshot['id']}/raw",
-        download_url=f"/api/snapshots/{snapshot['id']}/download",
-        source_url=f"/snapshots/{snapshot['id']}/source",
-        reparse_url=f"/snapshots/{snapshot['id']}/reparse",
+        posts_url=f"/posts?page_url={quote(snapshot['page_url'], safe='')}",
     )
     return render(request, "snapshot.html", context)
-
-
-def snapshot_source(request: Request, snapshot_id: str):
-    loaded = _snapshot_context(request, snapshot_id, with_blob=True)
-    if loaded is None:
-        return render(request, "404.html", {}, status_code=404)
-    snapshot, blob, context = loaded
-
-    truncated = len(blob) > SOURCE_VIEW_MAX_BYTES
-    text = blob[:SOURCE_VIEW_MAX_BYTES].decode("utf-8", errors="replace")
-    context.update(
-        nav="snapshots",
-        snapshot=snapshot,
-        sha12=snapshot["sha256"][:12],
-        lines=[(n, line) for n, line in enumerate(text.splitlines(), 1)],
-        truncated=truncated,
-        shown_bytes=min(len(blob), SOURCE_VIEW_MAX_BYTES),
-        download_url=f"/api/snapshots/{snapshot['id']}/download",
-        back_url=f"/snapshots/{snapshot['id']}",
-    )
-    return render(request, "source.html", context)
-
-
-def snapshot_reparse(request: Request, snapshot_id: str):
-    loaded = _snapshot_context(request, snapshot_id, with_blob=True)
-    if loaded is None:
-        return render(request, "404.html", {}, status_code=404)
-    snapshot, blob, context = loaded
-
-    # The parser needs the capture time to resolve relative dates ("2h
-    # ago"). A row whose captured_at will not parse used to take the whole
-    # page down with a 500; fall back to now and say so instead, since the
-    # rest of the reparse is still useful.
-    extra_diagnostics: list[dict[str, str]] = []
-    try:
-        captured_at = datetime.fromisoformat(snapshot["captured_at"])
-    except (TypeError, ValueError):
-        captured_at = datetime.now(timezone.utc)
-        extra_diagnostics.append(
-            {
-                "reason": "unreadable_captured_at",
-                "context": (
-                    f"Stored capture time {snapshot['captured_at']!r} is not an "
-                    "ISO-8601 timestamp. Relative dates below were resolved "
-                    "against the current time instead, so they may be wrong."
-                ),
-            }
-        )
-
-    # Read-only by construction: parser.parse touches no storage, so this
-    # view can never change what the crawler recorded.
-    posts, diagnostics = parse_captured_html(
-        blob, snapshot["page_url"], captured_at
-    )
-    context.update(
-        nav="snapshots",
-        snapshot=snapshot,
-        sha12=snapshot["sha256"][:12],
-        posts=[
-            {
-                "post_id": post.post_id,
-                "author": post.author,
-                "published_at": post.published_at,
-                "text": post.text,
-                "url": "/posts/" + quote(post.post_id, safe=""),
-            }
-            for post in posts
-        ],
-        diagnostics=extra_diagnostics
-        + [
-            {"reason": diag.reason, "context": diag.context}
-            for diag in diagnostics
-        ],
-        back_url=f"/snapshots/{snapshot['id']}",
-    )
-    return render(request, "reparse.html", context)
 
 
 def home(request: Request):
