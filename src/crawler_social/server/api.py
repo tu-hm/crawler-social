@@ -126,6 +126,21 @@ POST_CSV_COLUMNS = (
     "first_seen", "last_seen",
 )
 
+#: Leading characters a spreadsheet reads as the start of a formula. Post
+#: text and author names come from a third party, so a cell beginning with
+#: one of these is prefixed with an apostrophe before it is written -- the
+#: sheet then shows the original text instead of evaluating it. "-" is in
+#: the set because the DDE vector starts with one; the cost is an
+#: apostrophe in front of a line that opened with a dash.
+CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def csv_cell(value: object) -> object:
+    """Neutralise a value that a spreadsheet would treat as a formula."""
+    if isinstance(value, str) and value.startswith(CSV_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
 
 @router.get("/summary", response_model=SummaryOut)
 def summary(conn: Conn) -> SummaryOut:
@@ -292,15 +307,17 @@ def export_posts_csv(
         "order": order,
     }
 
-    def rows() -> "list[dict]":
+    def rows():
         offset = 0
         while True:
             batch, total = queries.list_posts(
                 conn, limit=queries.MAX_PAGE_SIZE, offset=offset, **filters
             )
+            if not batch:
+                break
             yield from batch
-            offset += queries.MAX_PAGE_SIZE
-            if not batch or offset >= total:
+            offset += len(batch)
+            if offset >= total:
                 break
 
     def stream():
@@ -311,7 +328,9 @@ def export_posts_csv(
         for row in rows():
             buffer.seek(0)
             buffer.truncate(0)
-            writer.writerow([row[column] for column in POST_CSV_COLUMNS])
+            writer.writerow(
+                [csv_cell(row[column]) for column in POST_CSV_COLUMNS]
+            )
             yield buffer.getvalue()
 
     return StreamingResponse(

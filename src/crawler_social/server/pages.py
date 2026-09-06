@@ -20,7 +20,7 @@ from .. import __version__, queries
 from ..facebook import check_gui_session
 from ..queries import DatabaseMissingError
 from ..parser import parse as parse_captured_html
-from .format import duration, highlight, relative_age, run_is_stale
+from .format import duration, highlight, relative_age, run_is_stale, snippet
 from .jobs import JobRefused, crawl_job
 from .params import normalize_when
 from .templating import create_templates, excerpt
@@ -37,6 +37,12 @@ STALE_RUN_AFTER = timedelta(hours=1)
 FRESH_WINDOW = timedelta(days=7)
 #: Chart span for the home page.
 CHART_DAYS = 30
+#: Default and ceiling for the "new posts" limit on the /crawl form.
+DEFAULT_CRAWL_LIMIT = 20
+MAX_CRAWL_LIMIT = 500
+#: Ceiling on comments per post asked for from the UI; each one costs a
+#: permalink navigation, so the form cannot ask for an unbounded number.
+MAX_CRAWL_COMMENTS = 100
 
 
 def render(
@@ -45,11 +51,42 @@ def render(
     context: dict[str, Any],
     status_code: int = 200,
 ):
+    """Render a template, filling in the shared header/footer data.
+
+    base.html always shows the version, the database path and the stored
+    counts, so a page rendered from a bare context (404, the error page,
+    a 400 or 401 raised inside a middleware) would otherwise print empty
+    chrome. A context that already carries `version` built its own -- and
+    skips the extra queries.
+    """
+    if "version" not in context:
+        merged = _chrome(request)
+        merged.update(context)
+        context = merged
     response = templates.TemplateResponse(
         request=request, name=name, context=context, status_code=status_code
     )
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+def _chrome(request: Request) -> dict[str, Any]:
+    """Header/footer data, reading the database only if it is readable.
+
+    Called on the error paths, so it must never raise: a page that is
+    already reporting a failure cannot afford a second one.
+    """
+    try:
+        conn = _open_readonly(request)
+    except Exception:
+        conn = None
+    try:
+        return base_context(request, conn)
+    except Exception:
+        return base_context(request)
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def build_pagination(
@@ -79,12 +116,32 @@ def build_pagination(
     }
 
 
+def last_page_redirect(
+    request: Request, total: int, limit: int, offset: int
+) -> RedirectResponse | None:
+    """Send an offset past the end back to the last page of results.
+
+    Without this, `?offset=100` on a five-post database rendered an empty
+    table under "No posts stored yet." -- false, and a dead end with no
+    pagination controls to get back. Terminates after one hop: the
+    clamped offset is always inside the result set.
+    """
+    if total <= 0 or offset < total or limit <= 0:
+        return None
+    last_offset = ((total - 1) // limit) * limit
+    if offset == last_offset:
+        return None
+    params = dict(request.query_params)
+    params["offset"] = str(last_offset)
+    return RedirectResponse(f"{request.url.path}?{urlencode(params)}", status_code=303)
+
+
 def base_context(request: Request, conn=None) -> dict[str, Any]:
     """Header/footer data shared by every page: db path, last run, counts."""
     context: dict[str, Any] = {
         "version": __version__,
         "db_path": str(request.app.state.config.db_path),
-        "db_present": True,
+        "db_present": conn is not None,
         "total_posts": 0,
         "total_snapshots": 0,
         "total_runs": 0,
@@ -199,13 +256,17 @@ def posts_list(request: Request):
     finally:
         conn.close()
 
+    past_end = last_page_redirect(request, total, limit, offset)
+    if past_end is not None:
+        return past_end
+
     enriched = []
     for row in rows:
         when = row["published_at"] or row["last_seen"]
         enriched.append(
             {
                 **row,
-                "text_html": highlight(excerpt(row["text"], 180), q or None),
+                "text_html": highlight(snippet(row["text"], q, 180), q or None),
                 "when": when,
                 "when_age": relative_age(when),
                 "url": "/posts/" + quote(row["post_id"], safe=""),
@@ -255,6 +316,31 @@ def _open_readonly(request: Request):
         return queries.connect_ro(request.app.state.config.db_path)
     except DatabaseMissingError:
         return None
+
+
+def _no_database_page(request: Request, template: str, nav: str, **extra: Any):
+    """A list page's own empty state before the first crawl.
+
+    These routes used to answer 404 "There is no page at this address."
+    when the database file did not exist yet, which is untrue -- the page
+    exists, the data does not -- and it makes a nav link look broken. The
+    home page and /posts already degraded this way; this makes /runs,
+    /snapshots and /state agree.
+    """
+    context = base_context(request)
+    context.update(
+        nav=nav,
+        rows=[],
+        total=0,
+        limit=DEFAULT_PAGE_SIZE,
+        pagination=None,
+        pages=[],
+        run_id="",
+        page_url="",
+        any_stale=False,
+    )
+    context.update(extra)
+    return render(request, template, context)
 
 
 #: Comments shown inline on a post page; the API serves the rest.
@@ -319,7 +405,7 @@ def post_detail(request: Request, post_id: str):
 def snapshots_list(request: Request):
     conn = _open_readonly(request)
     if conn is None:
-        return render(request, "404.html", {}, status_code=404)
+        return _no_database_page(request, "snapshots.html", "snapshots")
     try:
         params = request.query_params
         run_id = _int_or_none(params.get("run_id"))
@@ -335,6 +421,10 @@ def snapshots_list(request: Request):
         context = base_context(request, conn)
     finally:
         conn.close()
+
+    past_end = last_page_redirect(request, total, limit, offset)
+    if past_end is not None:
+        return past_end
 
     context.update(
         nav="snapshots",
@@ -424,12 +514,30 @@ def snapshot_reparse(request: Request, snapshot_id: str):
         return render(request, "404.html", {}, status_code=404)
     snapshot, blob, context = loaded
 
+    # The parser needs the capture time to resolve relative dates ("2h
+    # ago"). A row whose captured_at will not parse used to take the whole
+    # page down with a 500; fall back to now and say so instead, since the
+    # rest of the reparse is still useful.
+    extra_diagnostics: list[dict[str, str]] = []
+    try:
+        captured_at = datetime.fromisoformat(snapshot["captured_at"])
+    except (TypeError, ValueError):
+        captured_at = datetime.now(timezone.utc)
+        extra_diagnostics.append(
+            {
+                "reason": "unreadable_captured_at",
+                "context": (
+                    f"Stored capture time {snapshot['captured_at']!r} is not an "
+                    "ISO-8601 timestamp. Relative dates below were resolved "
+                    "against the current time instead, so they may be wrong."
+                ),
+            }
+        )
+
     # Read-only by construction: parser.parse touches no storage, so this
     # view can never change what the crawler recorded.
     posts, diagnostics = parse_captured_html(
-        blob,
-        snapshot["page_url"],
-        datetime.fromisoformat(snapshot["captured_at"]),
+        blob, snapshot["page_url"], captured_at
     )
     context.update(
         nav="snapshots",
@@ -445,7 +553,8 @@ def snapshot_reparse(request: Request, snapshot_id: str):
             }
             for post in posts
         ],
-        diagnostics=[
+        diagnostics=extra_diagnostics
+        + [
             {"reason": diag.reason, "context": diag.context}
             for diag in diagnostics
         ],
@@ -561,7 +670,7 @@ def _enrich_run(run: dict) -> dict:
 def runs_list(request: Request):
     conn = _open_readonly(request)
     if conn is None:
-        return render(request, "404.html", {}, status_code=404)
+        return _no_database_page(request, "runs.html", "runs")
     try:
         params = request.query_params
         limit = _int_param(
@@ -572,6 +681,9 @@ def runs_list(request: Request):
         context = base_context(request, conn)
     finally:
         conn.close()
+    past_end = last_page_redirect(request, total, limit, offset)
+    if past_end is not None:
+        return past_end
     enriched = [_enrich_run(run) for run in rows]
     context.update(
         nav="runs",
@@ -628,7 +740,7 @@ def run_detail(request: Request, run_id: str):
 def state_view(request: Request):
     conn = _open_readonly(request)
     if conn is None:
-        return render(request, "404.html", {}, status_code=404)
+        return _no_database_page(request, "state.html", "")
     try:
         rows = queries.get_state(conn)
         enriched = []
@@ -681,7 +793,6 @@ def _csrf_ok(request: Request, form_token: str | None) -> bool:
 
 def _crawl_context(request: Request, **extra: Any) -> dict[str, Any]:
     status = crawl_job.status()
-    context = base_context(request)
     gui_ready = True
     try:
         check_gui_session()
@@ -690,11 +801,15 @@ def _crawl_context(request: Request, **extra: Any) -> dict[str, Any]:
     conn = _open_readonly(request)
     known_pages: list[dict] = []
     last_run = None
+    # The chrome counts come from the same connection: building them
+    # without one printed "0 posts / 0 snapshots / 0 runs" in the footer
+    # of a populated database.
+    context = base_context(request, conn)
     if conn is not None:
         try:
             known_pages = queries.list_pages(conn)
-            last_run = queries.list_runs(conn, limit=1)[0]
-            last_run = last_run[0] if last_run else None
+            recent_runs, _total = queries.list_runs(conn, limit=1)
+            last_run = recent_runs[0] if recent_runs else None
         finally:
             conn.close()
     context.update(
@@ -702,7 +817,7 @@ def _crawl_context(request: Request, **extra: Any) -> dict[str, Any]:
         status=status,
         csrf_token=request.app.state.csrf_token,
         page_url_value=request.app.state.config.page_url or "",
-        limit_value=20,
+        limit_value=DEFAULT_CRAWL_LIMIT,
         comments_value=request.app.state.config.top_comments,
         pages=known_pages,
         gui_ready=gui_ready,
@@ -725,24 +840,38 @@ async def crawl_start(request: Request):
             request, reason="Invalid or missing form token (CSRF check failed)."
         )
         return render(request, "crawl.html", context, status_code=403)
+    config = request.app.state.config
     try:
-        limit = int(str(form.get("limit") or 20))
+        limit = int(str(form.get("limit") or DEFAULT_CRAWL_LIMIT))
     except ValueError:
-        limit = 20
-    limit = max(1, min(limit, 500))
+        limit = DEFAULT_CRAWL_LIMIT
+    limit = max(1, min(limit, MAX_CRAWL_LIMIT))
     try:
         comments = int(str(form.get("comments") or 0))
     except ValueError:
         comments = 0
     # Clamped here, not just in the CLI: this value becomes an argv entry and
     # a per-post permalink navigation.
-    comments = max(0, min(comments, 100))
+    comments = max(0, min(comments, MAX_CRAWL_COMMENTS))
     page_url = str(form.get("page_url") or "").strip()
     try:
-        crawl_job.start(page_url, limit, comments=comments)
+        crawl_job.start(
+            page_url,
+            limit,
+            comments=comments,
+            # Without this the configured ceiling on permalink visits was
+            # silently dropped for UI-started crawls and the CLI default
+            # applied instead.
+            comments_max_posts=config.comments_max_posts if comments else None,
+        )
     except JobRefused as exc:
+        # 409, not 200: nothing was started, and a refusal is not a
+        # successful page view for a client or a cache to treat as one.
         return render(
-            request, "crawl.html", _crawl_context(request, reason=str(exc))
+            request,
+            "crawl.html",
+            _crawl_context(request, reason=str(exc)),
+            status_code=409,
         )
     return RedirectResponse("/crawl", status_code=303)
 

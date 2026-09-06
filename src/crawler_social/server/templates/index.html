@@ -115,7 +115,10 @@
         <td class="mono">{{ post.published_at or post.last_seen }}</td>
         <td>{{ post.author or "—" }}</td>
         <td class="post-cell"><span class="excerpt">{{ post.text | excerpt }}</span></td>
-        <td><a href="/posts/{{ post.post_id | urlencode }}">view</a></td>
+        {# post.url comes from the handler, fully percent-encoded. Jinja's
+           urlencode leaves "/" alone, and a Facebook post id can contain
+           one, which built a link to the wrong path. #}
+        <td><a href="{{ post.url }}">view</a></td>
       </tr>
       {% endfor %}
     </tbody>

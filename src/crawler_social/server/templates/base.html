@@ -8,14 +8,16 @@
   <script src="/static/app.js" defer></script>
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to content</a>
   <header class="site-header">
     <div class="wrap header-row">
       <a class="brand" href="/">crawler-<span>social</span></a>
       <nav class="site-nav" aria-label="Sections">
-        <a href="/posts"{% if nav == "posts" %} class="active"{% endif %}>Posts</a>
-        <a href="/runs"{% if nav == "runs" %} class="active"{% endif %}>Runs</a>
-        <a href="/snapshots"{% if nav == "snapshots" %} class="active"{% endif %}>Snapshots</a>
-        <a href="/crawl"{% if nav == "crawl" %} class="active"{% endif %}>Crawl</a>
+        {# aria-current tells a screen reader which section it is in; the
+           .active class alone only says it visually. #}
+        {% for item, label in [("posts", "Posts"), ("runs", "Runs"), ("snapshots", "Snapshots"), ("crawl", "Crawl")] %}
+        <a href="/{{ item }}"{% if nav == item %} class="active" aria-current="page"{% endif %}>{{ label }}</a>
+        {% endfor %}
       </nav>
       <div class="header-meta">
         <span class="db-path" title="SQLite database file">{{ db_path }}</span>
@@ -25,13 +27,17 @@
       </div>
     </div>
   </header>
-  <main class="wrap">
+  <main class="wrap" id="main">
     {% block content %}{% endblock %}
   </main>
   <footer class="site-footer">
     <div class="wrap footer-row">
       <span>crawler-social v{{ version }}</span>
-      <span>{{ total_posts }} posts · {{ total_snapshots }} snapshots · {{ total_runs }} runs</span>
+      <span>
+        {{ total_posts }} post{{ "" if total_posts == 1 else "s" }} ·
+        {{ total_snapshots }} snapshot{{ "" if total_snapshots == 1 else "s" }} ·
+        {{ total_runs }} run{{ "" if total_runs == 1 else "s" }}
+      </span>
     </div>
   </footer>
 </body>

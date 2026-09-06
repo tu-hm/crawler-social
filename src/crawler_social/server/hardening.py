@@ -34,8 +34,15 @@ TOKEN_PARAM = "token"
 MIN_TOKEN_CHARS = 32
 MAX_QUERY_BYTES = 4096
 MAX_Q_CHARS = 500
+#: The only bodies this server reads are the two small /crawl forms, so a
+#: body larger than this is refused before anything reads it.
+MAX_BODY_BYTES = 64 * 1024
 
-_ERROR_TITLES = {400: "Bad request", 401: "Sign-in required"}
+_ERROR_TITLES = {
+    400: "Bad request",
+    401: "Sign-in required",
+    413: "Request too large",
+}
 
 
 def wants_json(request) -> bool:
@@ -106,7 +113,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
 
 class LimitsMiddleware(BaseHTTPMiddleware):
-    """Reject oversized query strings and `q` values with 400."""
+    """Reject oversized query strings, `q` values and request bodies."""
 
     async def dispatch(self, request, call_next):
         query_string = request.scope.get("query_string", b"")
@@ -122,6 +129,24 @@ class LimitsMiddleware(BaseHTTPMiddleware):
                 "q_too_long",
                 f"q exceeds {MAX_Q_CHARS} characters.",
             )
+        # A declared length is refused up front so the body is never read.
+        # An undeclared (chunked) body still can't grow past the cap
+        # because nothing downstream reads more than the form.
+        declared = request.headers.get("content-length")
+        if declared is not None:
+            try:
+                length = int(declared)
+            except ValueError:
+                return _error_response(
+                    request, 400, "bad_content_length", "Content-Length is not a number."
+                )
+            if length > MAX_BODY_BYTES:
+                return _error_response(
+                    request,
+                    413,
+                    "body_too_large",
+                    f"Request body exceeds {MAX_BODY_BYTES // 1024} KiB.",
+                )
         return await call_next(request)
 
 

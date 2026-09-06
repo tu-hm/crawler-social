@@ -6,7 +6,7 @@
   <a class="button" href="/runs">← All runs</a>
 </div>
 
-<div class="detail-grid">
+<dl class="detail-grid">
   <dt>Status</dt>
   <dd>
     {% if run.status_ok %}
@@ -25,7 +25,7 @@
   <dd>{{ run.snapshot_count }}</dd>
   <dt>Error</dt>
   <dd>{% if run.error %}<pre class="post-text error-text">{{ run.error }}</pre>{% else %}<span class="muted">(none)</span>{% endif %}</dd>
-</div>
+</dl>
 
 <section class="panel">
   <h2>Snapshots ({{ snapshots | length }})</h2>

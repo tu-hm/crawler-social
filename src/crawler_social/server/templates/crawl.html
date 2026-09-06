@@ -26,12 +26,19 @@
 {% if status.running %}
 <section class="panel">
   <h2>Crawl running</h2>
-  <p data-crawl-status>Running {{ status.page_url }} for {{ status.elapsed_seconds }}s…</p>
-  <pre class="source-view" id="crawl-output">{% for line in status.lines %}{{ line }}
+  {# aria-live so a screen reader hears the crawl finish; the page URL is
+     kept in its own element so the polling script can rewrite only the
+     elapsed time and not throw the URL away. #}
+  <p aria-live="polite">
+    Running <span class="mono">{{ status.page_url }}</span>
+    <span data-crawl-status>for {{ (status.elapsed_seconds or 0) | round | int }}s…</span>
+  </p>
+  <pre class="source-view" id="crawl-output" data-crawl-log>{% for line in status.lines %}{{ line }}
 {% endfor %}</pre>
-  {% if status.lines_dropped %}
-  <p class="muted">{{ status.lines_dropped }} earlier lines dropped from the live view.</p>
-  {% endif %}
+  <p class="muted" data-crawl-dropped{% if not status.lines_dropped %} hidden{% endif %}>
+    <span data-crawl-dropped-count>{{ status.lines_dropped }}</span>
+    earlier lines dropped from the live view.
+  </p>
   {% if status.stop_requested %}
   <p class="muted">A graceful stop was requested — waiting for the crawl to wrap up.</p>
   {% endif %}

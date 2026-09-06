@@ -55,10 +55,15 @@
 </table>
 </div>
 {% include "partials/pagination.html" %}
+{% elif run_id or page_url %}
+<section class="empty-state">
+  <p>No snapshots match these filters.</p>
+  <p><a class="button" href="/snapshots">Clear filters</a></p>
+</section>
 {% else %}
 <section class="empty-state">
-  <p>No snapshots match.</p>
-  {% if run_id or page_url %}<p><a class="button" href="/snapshots">Clear filters</a></p>{% endif %}
+  <p>No snapshots stored yet.</p>
+  <p><code class="command">uv run crawler crawl &lt;page-url&gt;</code></p>
 </section>
 {% endif %}
 {% endblock %}

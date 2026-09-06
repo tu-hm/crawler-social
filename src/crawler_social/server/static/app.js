@@ -47,25 +47,61 @@
   // Crawl status polling (only when the status panel is present).
   var statusPanel = document.querySelector("[data-crawl-status]");
   if (statusPanel) {
+    var log = document.querySelector("[data-crawl-log]");
+    var dropped = document.querySelector("[data-crawl-dropped]");
+    var droppedCount = document.querySelector("[data-crawl-dropped-count]");
+    var failures = 0;
+
+    // Only scroll the log for a reader who is already at the bottom, so
+    // polling never yanks the view away from a line being read.
+    var updateLog = function (lines) {
+      if (!log || !lines) return;
+      var text = lines.join("\n");
+      if (text === log.textContent) return;
+      var atBottom =
+        log.scrollHeight - log.scrollTop - log.clientHeight < 24;
+      log.textContent = text;
+      if (atBottom) log.scrollTop = log.scrollHeight;
+    };
+
     var refresh = function () {
-      fetch("/api/crawl/status")
+      fetch("/api/crawl/status", { headers: { Accept: "application/json" } })
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (data) {
-          if (!data) return;
+          if (!data) throw new Error("bad status response");
+          failures = 0;
+          updateLog(data.lines);
+          if (dropped && droppedCount) {
+            droppedCount.textContent = data.lines_dropped;
+            dropped.hidden = !data.lines_dropped;
+          }
           if (!data.running && data.exit_code !== null) {
             // Crawl finished: reload so the form and its summary return.
-            setTimeout(function () { window.location.reload(); }, 1500);
             statusPanel.textContent =
-              "Finished with exit code " + data.exit_code + " — reloading…";
+              "— finished with exit code " + data.exit_code + ", reloading…";
+            setTimeout(function () { window.location.reload(); }, 1500);
             return;
           }
+          // elapsed_seconds is null until the job has a start time; without
+          // the guard this rendered "for NaNs".
+          var elapsed = data.elapsed_seconds;
           statusPanel.textContent = data.running
-            ? "Crawl running for " + Math.round(data.elapsed_seconds) + "s"
-            : "Idle";
+            ? "for " + (elapsed === null ? 0 : Math.round(elapsed)) + "s…"
+            : "— idle";
+          if (data.stop_requested) {
+            statusPanel.textContent += " (stopping)";
+          }
           setTimeout(refresh, 2000);
         })
         .catch(function () {
-          setTimeout(refresh, 2000);
+          // Back off instead of hammering a server that is down, and give
+          // up rather than polling a dead endpoint forever.
+          failures += 1;
+          if (failures > 5) {
+            statusPanel.textContent = "— status unavailable; reload the page";
+            return;
+          }
+          setTimeout(refresh, 2000 * failures);
         });
     };
     refresh();

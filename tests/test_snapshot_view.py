@@ -79,7 +79,10 @@ def test_snapshots_list_filters(client: TestClient):
     assert client.get("/snapshots", params={"run_id": 1}).status_code == 200
     empty = client.get("/snapshots", params={"run_id": 999})
     assert empty.status_code == 200
-    assert "No snapshots match." in empty.text
+    # The wording now distinguishes "filtered to nothing" from
+    # "nothing stored at all", which used to read the same.
+    assert "No snapshots match these filters." in empty.text
+    assert "Clear filters" in empty.text
 
 
 def test_snapshot_detail_embeds_sandboxed_iframe(client: TestClient):

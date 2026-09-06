@@ -130,9 +130,15 @@ def list_posts(
         conn.execute(f"SELECT COUNT(*) FROM posts{where_sql}", params).fetchone()[0]
     )
     direction = "ASC" if order == "oldest" else "DESC"
+    # post_id breaks ties in the same direction as the key. Without it the
+    # sort is not total, so LIMIT/OFFSET paging over posts that share a
+    # timestamp may repeat or skip a row, and the order disagrees with
+    # post_neighbors -- which does tie-break -- so prev/next on the detail
+    # page can walk out of step with the list it came from.
     rows = conn.execute(
         f"SELECT {_post_columns(conn)} FROM posts{where_sql} "
-        f"ORDER BY COALESCE(published_at, last_seen) {direction} "
+        f"ORDER BY COALESCE(published_at, last_seen) {direction}, "
+        f"post_id {direction} "
         f"LIMIT ? OFFSET ?",
         [*params, *_clamp(limit, offset)],
     ).fetchall()

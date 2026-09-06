@@ -10,7 +10,7 @@
   </div>
 </div>
 
-<div class="detail-grid">
+<dl class="detail-grid">
   <dt>Run</dt>
   <dd><a href="/runs/{{ snapshot.run_id }}">#{{ snapshot.run_id }}</a></dd>
   <dt>Page</dt>
@@ -21,7 +21,7 @@
   <dd>{{ snapshot.size_bytes | bytes }}</dd>
   <dt>SHA-256</dt>
   <dd class="mono">{{ snapshot.sha256 }}</dd>
-</div>
+</dl>
 
 <p class="notice">
   The preview below is fully sandboxed: the captured page runs no scripts,
