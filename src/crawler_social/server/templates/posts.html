@@ -3,12 +3,31 @@
 {% block content %}
 <div class="page-head">
   <h1>Posts</h1>
-  {% if csv_url %}<a class="button" href="{{ csv_url }}">Download CSV</a>{% endif %}
+  {% if csv_url %}<a class="button" id="csv-link" href="{{ csv_url }}">Download CSV</a>{% endif %}
 </div>
 
-<form class="filter-bar" method="get" action="/posts" data-auto>
+{# htmx re-requests this same route and swaps #results out of the full
+   response, so there is no partial template and no HX-Request branch --
+   see plans/v4/00 D1. The trigger list mirrors exactly what app.js used to
+   do: change on selects and dates, a 500ms debounce on the search box.
+   Explicit `from:` sources because a <select> fires `input` as well as
+   `change`, and a bare `input` trigger would fire twice per selection.
+   `submit` is listed because overriding hx-trigger drops a form's natural
+   submit trigger. The method/action stay: with htmx absent this submits. #}
+<form class="filter-bar" method="get" action="/posts"
+      hx-get="/posts"
+      hx-trigger="submit,
+                  change from:select,
+                  change from:input[type='date'],
+                  keyup changed delay:500ms from:input[type='search']"
+      hx-select="#results"
+      hx-target="#results"
+      hx-swap="outerHTML"
+      hx-select-oob="#csv-link"
+      hx-push-url="true"
+      hx-indicator="#results">
   <input type="search" name="q" value="{{ q }}" placeholder="Search post text…" aria-label="Search post text">
-  <select name="page_url" aria-label="Page" data-auto>
+  <select name="page_url" aria-label="Page">
     <option value="">All pages</option>
     {% for page in pages %}
     <option value="{{ page.page_url }}"{% if page_url == page.page_url %} selected{% endif %}>{{ page.page_url }}</option>
@@ -16,7 +35,7 @@
   </select>
   <input type="date" name="since" value="{{ since_input }}" aria-label="Since">
   <input type="date" name="until" value="{{ until_input }}" aria-label="Until">
-  <select name="order" aria-label="Order" data-auto>
+  <select name="order" aria-label="Order">
     <option value="newest"{% if order == "newest" %} selected{% endif %}>Newest first</option>
     <option value="oldest"{% if order == "oldest" %} selected{% endif %}>Oldest first</option>
   </select>
@@ -24,6 +43,10 @@
   {% if has_filters %}<a class="button" href="{{ clear_url }}">Clear</a>{% endif %}
 </form>
 
+{# Everything htmx swaps. The chips belong inside: typing in the search
+   box has to make a chip appear. The form stays outside -- swapping a form
+   mid-keystroke would destroy the caret. #}
+<div id="results">
 {% if chips %}
 <div class="active-filters" aria-label="Active filters">
   {% for chip in chips %}
@@ -71,15 +94,24 @@
 {% else %}
 {% include "partials/empty_state.html" %}
 {% endif %}
+</div>
 
-<form class="page-size-form" method="get" action="/posts" data-auto>
+<form class="page-size-form" method="get" action="/posts"
+      hx-get="/posts"
+      hx-trigger="submit, change from:select"
+      hx-select="#results"
+      hx-target="#results"
+      hx-swap="outerHTML"
+      hx-select-oob="#csv-link"
+      hx-push-url="true"
+      hx-indicator="#results">
   <input type="hidden" name="q" value="{{ q }}">
   <input type="hidden" name="page_url" value="{{ page_url }}">
   <input type="hidden" name="since" value="{{ since_input }}">
   <input type="hidden" name="until" value="{{ until_input }}">
   <input type="hidden" name="order" value="{{ order }}">
   <label for="page-size">Per page</label>
-  <select id="page-size" name="limit" data-auto>
+  <select id="page-size" name="limit">
     {% for size in page_sizes %}
     <option value="{{ size }}"{% if size == limit %} selected{% endif %}>{{ size }}</option>
     {% endfor %}

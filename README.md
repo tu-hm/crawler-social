@@ -90,6 +90,17 @@ uv run crawler serve          # http://127.0.0.1:8765
   HTML, because none is stored; the app's own pages carry a strict CSP with no inline
   script or style, stored post and comment text is escaped, and error pages expose
   nothing but a request id.
+- **Server-rendered, with two vendored libraries and no build step** (plans/v4).
+  Jinja renders every page complete; htmx then re-requests the *same* route and swaps
+  one region out of the full response, so filtering `/posts` and following `/crawl`
+  output no longer reload the page. Alpine (the CSP-friendly build, because the CSP
+  carries no `unsafe-eval`) handles the small client state. Both are plain files under
+  `static/vendor/`, committed and checksummed — there is no npm, no bundler and no
+  `node_modules`, so a clone plus `uv sync` gives you a working viewer offline. Use
+  `make vendor` to re-fetch them and `make vendor-verify` to check them.
+- **Everything still works with JavaScript disabled.** Every `hx-get` sits on a link
+  or form that already worked, which `tests/test_htmx_contract.py` asserts rather than
+  assumes.
 
 The HTML pages and the JSON API under `/api` share one parameter vocabulary (`q`,
 `page_url`, `since`, `until`, `order`, `limit`, `offset`), so a UI URL differs from an
@@ -113,7 +124,9 @@ result set.
   watermark table that decides where the next crawl stops.
 - **Crawl (`/crawl`)** — the "Crawl now" button, live output, and a stop control. It
   works only on a desktop session with a visible browser, and refuses a second crawl
-  while one is running.
+  while one is running. The output panel polls itself every two seconds and stops on
+  its own when the crawl ends, because the idle panel it swaps back in carries no
+  trigger.
 
 ## Long posts and comments (plans/v3)
 

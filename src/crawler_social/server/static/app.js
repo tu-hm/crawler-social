@@ -1,109 +1,116 @@
 /*
  * Progressive enhancements only: every viewer feature must work with this
- * file disabled. No framework, no build step, no network requests.
+ * file, and both vendored libraries, disabled. No build step and no network
+ * requests -- htmx and Alpine are plain files under /static/vendor.
+ *
+ * What used to live here and no longer does: the filter-form auto-submit
+ * (now hx-trigger on the forms themselves) and the /crawl status poll (now
+ * hx-trigger="every 2s" on a panel that swaps itself away when the crawl
+ * ends). See plans/v4/02-htmx-interactions.md.
+ *
+ * Alpine is the @alpinejs/csp build, because script-src 'self' carries no
+ * unsafe-eval. Attributes may only NAME a property or method -- every
+ * expression lives in the Alpine.data() registrations below.
  */
 (function () {
   "use strict";
 
   document.documentElement.classList.add("js");
 
-  // Filter forms: submit on change so adjusting a select or date applies
-  // immediately. Text fields debounce-submit after a pause in typing.
-  document.querySelectorAll("form[data-auto]").forEach(function (form) {
-    form.querySelectorAll("select, input[type='date']").forEach(function (el) {
-      el.addEventListener("change", function () {
-        form.submit();
-      });
-    });
-    var timer = null;
-    form.querySelectorAll("input[type='search']").forEach(function (el) {
-      el.addEventListener("input", function () {
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(function () {
-          form.submit();
-        }, 500);
-      });
-    });
+  // --- The crawl log's scroll anchor ---------------------------------------
+  //
+  // The log's innerHTML is swapped out of band on every /crawl poll. Only
+  // follow the tail for a reader who is already at the bottom, so polling
+  // never pulls the view away from a line being read. This is an htmx event
+  // listener rather than an Alpine component on purpose: Alpine state lives
+  // on an element, and this element's contents are replaced every 2s.
+  var logAtBottom = true;
+
+  document.addEventListener("htmx:beforeSwap", function () {
+    var log = document.getElementById("crawl-output");
+    if (!log) return;
+    logAtBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
   });
 
-  // Copy-to-clipboard buttons (post detail text).
-  document.querySelectorAll("[data-copy-target]").forEach(function (button) {
-    button.addEventListener("click", function () {
-      var source = document.querySelector(button.getAttribute("data-copy-target"));
-      if (!source || !navigator.clipboard) return;
-      navigator.clipboard.writeText(source.textContent || "").then(
-        function () {
-          var original = button.textContent;
-          button.textContent = "Copied";
-          setTimeout(function () {
-            button.textContent = original;
-          }, 1200);
+  document.addEventListener("htmx:afterSwap", function () {
+    var log = document.getElementById("crawl-output");
+    if (log && logAtBottom) log.scrollTop = log.scrollHeight;
+  });
+
+  // --- Alpine components ---------------------------------------------------
+  document.addEventListener("alpine:init", function () {
+    // Copy the post text. Replaces the old [data-copy-target] loop; the
+    // attribute stays because it is the template's way of saying which
+    // element to read, and a selector hard-coded here would be worse.
+    Alpine.data("copyButton", function () {
+      return {
+        idle: true,
+        copied: false,
+        copy: function () {
+          var selector = this.$el.getAttribute("data-copy-target");
+          var source = selector && document.querySelector(selector);
+          if (!source || !navigator.clipboard) return;
+          var self = this;
+          navigator.clipboard.writeText(source.textContent || "").then(
+            function () {
+              self.idle = false;
+              self.copied = true;
+              setTimeout(function () {
+                self.idle = true;
+                self.copied = false;
+              }, 1200);
+            },
+            // A denied clipboard permission should not reach the console.
+            function () {}
+          );
         },
-        function () {}
-      );
+      };
+    });
+
+    // Show a run's full error text in the list, instead of only the first
+    // 120 characters with /runs/{id} as the sole way to read the rest.
+    Alpine.data("disclosure", function () {
+      return {
+        closed: true,
+        open: false,
+        label: "more",
+        toggle: function () {
+          this.open = !this.open;
+          this.closed = !this.open;
+          this.label = this.open ? "less" : "more";
+        },
+      };
+    });
+
+    // What the crawl form's numbers actually cost. Every comment asked for
+    // is one permalink navigation, which plans/v3 calls the most bot-visible
+    // thing this project does, so the form says so in numbers.
+    //
+    // Reads the inputs on `input` rather than binding them with x-model:
+    // x-model has to write back into the component, and that path is not
+    // one this build's docs promise. A method call is unambiguous.
+    Alpine.data("crawlCost", function () {
+      return {
+        estimate: "",
+        init: function () {
+          this.recalc();
+        },
+        recalc: function () {
+          var limit = Number(this._value("limit")) || 0;
+          var comments = Number(this._value("comments")) || 0;
+          if (!comments || !limit) {
+            this.estimate = "";
+            return;
+          }
+          this.estimate =
+            "≈ " + limit + " extra permalink visit" +
+            (limit === 1 ? "" : "s") + " for comments";
+        },
+        _value: function (name) {
+          var input = this.$el.querySelector("[name='" + name + "']");
+          return input ? input.value : "";
+        },
+      };
     });
   });
-
-  // Crawl status polling (only when the status panel is present).
-  var statusPanel = document.querySelector("[data-crawl-status]");
-  if (statusPanel) {
-    var log = document.querySelector("[data-crawl-log]");
-    var dropped = document.querySelector("[data-crawl-dropped]");
-    var droppedCount = document.querySelector("[data-crawl-dropped-count]");
-    var failures = 0;
-
-    // Only scroll the log for a reader who is already at the bottom, so
-    // polling never yanks the view away from a line being read.
-    var updateLog = function (lines) {
-      if (!log || !lines) return;
-      var text = lines.join("\n");
-      if (text === log.textContent) return;
-      var atBottom =
-        log.scrollHeight - log.scrollTop - log.clientHeight < 24;
-      log.textContent = text;
-      if (atBottom) log.scrollTop = log.scrollHeight;
-    };
-
-    var refresh = function () {
-      fetch("/api/crawl/status", { headers: { Accept: "application/json" } })
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (data) {
-          if (!data) throw new Error("bad status response");
-          failures = 0;
-          updateLog(data.lines);
-          if (dropped && droppedCount) {
-            droppedCount.textContent = data.lines_dropped;
-            dropped.hidden = !data.lines_dropped;
-          }
-          if (!data.running && data.exit_code !== null) {
-            // Crawl finished: reload so the form and its summary return.
-            statusPanel.textContent =
-              "— finished with exit code " + data.exit_code + ", reloading…";
-            setTimeout(function () { window.location.reload(); }, 1500);
-            return;
-          }
-          // elapsed_seconds is null until the job has a start time; without
-          // the guard this rendered "for NaNs".
-          var elapsed = data.elapsed_seconds;
-          statusPanel.textContent = data.running
-            ? "for " + (elapsed === null ? 0 : Math.round(elapsed)) + "s…"
-            : "— idle";
-          if (data.stop_requested) {
-            statusPanel.textContent += " (stopping)";
-          }
-          setTimeout(refresh, 2000);
-        })
-        .catch(function () {
-          // Back off instead of hammering a server that is down, and give
-          // up rather than polling a dead endpoint forever.
-          failures += 1;
-          if (failures > 5) {
-            statusPanel.textContent = "— status unavailable; reload the page";
-            return;
-          }
-          setTimeout(refresh, 2000 * failures);
-        });
-    };
-    refresh();
-  }
 })();

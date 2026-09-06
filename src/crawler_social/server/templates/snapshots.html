@@ -6,14 +6,27 @@
 </div>
 <p class="muted">Metadata only — captured HTML is never loaded into a list view.</p>
 
-<form class="filter-bar" method="get" action="/snapshots" data-auto>
+{# Same pattern as /posts: re-request this route, swap #results out of the
+   full response. The Run ID field is type=text and takes `change` on blur,
+   not a keystroke debounce -- app.js only ever debounced input[type=search],
+   so this field was never auto-submitted before either. #}
+<form class="filter-bar" method="get" action="/snapshots"
+      hx-get="/snapshots"
+      hx-trigger="submit,
+                  change from:select,
+                  change from:input[type='text']"
+      hx-select="#results"
+      hx-target="#results"
+      hx-swap="outerHTML"
+      hx-push-url="true"
+      hx-indicator="#results">
   <label>
     Run ID
     <input type="text" name="run_id" value="{{ run_id }}" inputmode="numeric" placeholder="any">
   </label>
   <label>
     Page
-    <select name="page_url" data-auto>
+    <select name="page_url">
       <option value="">All pages</option>
       {% for page in pages %}
       <option value="{{ page.page_url }}"{% if page_url == page.page_url %} selected{% endif %}>{{ page.page_url }}</option>
@@ -24,6 +37,7 @@
   {% if run_id or page_url %}<a class="button" href="/snapshots">Clear</a>{% endif %}
 </form>
 
+<div id="results">
 {% if rows %}
 <p class="result-count">{{ total }} snapshot{% if total != 1 %}s{% endif %}</p>
 <div class="table-scroll">
@@ -66,4 +80,5 @@
   <p><code class="command">uv run crawler crawl &lt;page-url&gt;</code></p>
 </section>
 {% endif %}
+</div>
 {% endblock %}

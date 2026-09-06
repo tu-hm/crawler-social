@@ -1,14 +1,23 @@
+{# Included by /posts, /runs and /snapshots, all of which wrap their rows
+   in #results -- so these four attributes are written once and work on all
+   three. Each anchor keeps its href: with htmx absent, it navigates. #}
 {% if pagination %}
 <nav class="pagination" aria-label="Pagination">
   <span class="page-info">showing {{ pagination.from }}–{{ pagination.to }} of {{ pagination.total }}</span>
   <span class="page-links">
     {% if pagination.prev_url %}
-    <a class="button" href="{{ pagination.prev_url }}">← Previous</a>
+    <a class="button" href="{{ pagination.prev_url }}"
+       hx-get="{{ pagination.prev_url }}"
+       hx-select="#results" hx-target="#results" hx-swap="outerHTML"
+       hx-push-url="true" hx-indicator="#results">← Previous</a>
     {% else %}
     <span class="button disabled">← Previous</span>
     {% endif %}
     {% if pagination.next_url %}
-    <a class="button" href="{{ pagination.next_url }}">Next →</a>
+    <a class="button" href="{{ pagination.next_url }}"
+       hx-get="{{ pagination.next_url }}"
+       hx-select="#results" hx-target="#results" hx-swap="outerHTML"
+       hx-push-url="true" hx-indicator="#results">Next →</a>
     {% else %}
     <span class="button disabled">Next →</span>
     {% endif %}

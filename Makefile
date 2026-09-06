@@ -1,4 +1,4 @@
-.PHONY: test install login session crawl chrome-cdp posts serve serve-check test-server clean
+.PHONY: test install login session crawl chrome-cdp posts serve serve-check test-server vendor vendor-verify clean
 
 # Run tests first by default.
 LIMIT ?= 10
@@ -43,6 +43,26 @@ test-server:
 # Start the viewer only after the whole suite is green.
 serve-check: test
 	uv run crawler serve
+
+# Vendored front-end libraries (plans/v4). Committed to the repo, so a
+# clone plus `uv sync` works offline with no Node installed. These targets
+# exist to re-fetch and diff, never as a build step.
+HTMX_VERSION ?= 2.0.6
+ALPINE_CSP_VERSION ?= 3.14.9
+VENDOR := src/crawler_social/server/static/vendor
+
+vendor:
+	curl -fsSL -o $(VENDOR)/htmx.min.js \
+	  https://unpkg.com/htmx.org@$(HTMX_VERSION)/dist/htmx.min.js
+	curl -fsSL -o $(VENDOR)/alpine-csp.min.js \
+	  https://cdn.jsdelivr.net/npm/@alpinejs/csp@$(ALPINE_CSP_VERSION)/dist/cdn.min.js
+	cd $(VENDOR) && shasum -a 256 htmx.min.js alpine-csp.min.js > SHASUMS256
+	@grep -q 'CSP-friendly build' $(VENDOR)/alpine-csp.min.js \
+	  || { echo "ERROR: alpine-csp.min.js is not the CSP build"; exit 1; }
+	@echo "pinned htmx $(HTMX_VERSION), alpine-csp $(ALPINE_CSP_VERSION)"
+
+vendor-verify:
+	cd $(VENDOR) && shasum -a 256 --check SHASUMS256
 
 clean:
 	rm -rf .pytest_cache data/fixtures

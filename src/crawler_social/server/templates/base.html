@@ -3,9 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {# htmx configuration lives in a meta tag, not an inline script: the Step
+     09 CSP forbids inline script, and a <meta> is neither script nor style.
+     Four defaults are wrong for this server -- see plans/v4/00 D6.
+     includeIndicatorStyles: htmx otherwise injects a <style> element.
+     historyCacheSize:       0 keeps rendered post text out of sessionStorage.
+     allowEval/allowScriptTags: no attribute may ever need unsafe-eval, and
+                             swapped markup must never execute a script. #}
+  <meta name="htmx-config" content='{"includeIndicatorStyles":false,"historyCacheSize":0,"allowEval":false,"allowScriptTags":false,"selfRequestsOnly":true}'>
   <title>{% block title %}crawler-social{% endblock %}</title>
   <link rel="stylesheet" href="/static/app.css">
+  {# app.js runs before Alpine so its alpine:init listener is registered
+     when Alpine starts. Deferred scripts execute in document order. #}
+  <script src="/static/vendor/htmx.min.js" defer></script>
   <script src="/static/app.js" defer></script>
+  <script src="/static/vendor/alpine-csp.min.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>

@@ -24,7 +24,18 @@
 <section class="panel">
   <div class="page-head">
     <h2>Text</h2>
-    {% if post.text %}<button class="button" type="button" data-copy-target="#post-text">Copy text</button>{% endif %}
+    {# Two spans rather than one label rewritten by JavaScript: the
+       server-rendered state has to be correct with JavaScript off, and
+       x-cloak is what keeps "Copied" hidden in that case. #}
+    {% if post.text %}
+    <button class="button" type="button"
+            x-data="copyButton" x-on:click="copy"
+            x-bind:disabled="copied"
+            data-copy-target="#post-text">
+      <span x-show="idle">Copy text</span>
+      <span x-show="copied" x-cloak>Copied</span>
+    </button>
+    {% endif %}
   </div>
   {% if post.text %}
   <pre class="post-text" id="post-text">{{ post.text }}</pre>

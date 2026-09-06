@@ -5,6 +5,35 @@
   <h1>Crawl</h1>
 </div>
 
+{# Announced to a screen reader, twice per crawl. This element is outside
+   #crawl-panel and is updated by an out-of-band :innerHTML swap, so the
+   live region itself is never replaced -- which is what makes the
+   announcement work. It deliberately carries no elapsed-second count: the
+   old aria-live paragraph was rewritten every two seconds, so a reader
+   heard the timer tick for the whole crawl. #}
+<p id="crawl-announce" class="visually-hidden" aria-live="polite">
+  {%- if status.running %}Crawl running.
+  {%- elif status.exit_code is not none %}Crawl finished with exit code {{ status.exit_code }}.
+  {%- endif %}
+</p>
+
+{# Everything that changes while a crawl runs. The poll attributes are
+   inside an {% if %}: when the crawl ends, the response's #crawl-panel is
+   the idle start form, which carries no hx-trigger -- so htmx stops
+   polling because the element that was polling no longer exists. That is
+   the whole termination mechanism (plans/v4/00 D4). hx-disinherit keeps a
+   future hx-post on the Stop form from inheriting the poll's target. #}
+<div id="crawl-panel"
+     hx-disinherit="hx-target hx-swap hx-select hx-select-oob"
+     {%- if status.running %}
+     hx-get="/crawl"
+     hx-trigger="every 2s"
+     hx-select="#crawl-panel"
+     hx-target="this"
+     hx-swap="outerHTML"
+     hx-select-oob="#crawl-output:innerHTML, #crawl-announce:innerHTML"
+     {%- endif %}>
+
 {% if not gui_ready %}
 <p class="warning">
   No graphical session detected (DISPLAY and WAYLAND_DISPLAY are empty).
@@ -26,19 +55,18 @@
 {% if status.running %}
 <section class="panel">
   <h2>Crawl running</h2>
-  {# aria-live so a screen reader hears the crawl finish; the page URL is
-     kept in its own element so the polling script can rewrite only the
-     elapsed time and not throw the URL away. #}
-  <p aria-live="polite">
+  {# No aria-live here: #crawl-announce above owns that, so the ticking
+     second count is shown but not read out. The whole paragraph is
+     re-rendered by the poll, so nothing needs its own element any more. #}
+  <p>
     Running <span class="mono">{{ status.page_url }}</span>
-    <span data-crawl-status>for {{ (status.elapsed_seconds or 0) | round | int }}s…</span>
+    <span>for {{ (status.elapsed_seconds or 0) | round | int }}s…</span>
   </p>
-  <pre class="source-view" id="crawl-output" data-crawl-log>{% for line in status.lines %}{{ line }}
-{% endfor %}</pre>
-  <p class="muted" data-crawl-dropped{% if not status.lines_dropped %} hidden{% endif %}>
-    <span data-crawl-dropped-count>{{ status.lines_dropped }}</span>
-    earlier lines dropped from the live view.
+  {% if status.lines_dropped %}
+  <p class="muted">
+    {{ status.lines_dropped }} earlier lines dropped from the live view.
   </p>
+  {% endif %}
   {% if status.stop_requested %}
   <p class="muted">A graceful stop was requested — waiting for the crawl to wrap up.</p>
   {% endif %}
@@ -48,7 +76,11 @@
   </form>
 </section>
 {% else %}
-<form class="filter-bar" method="post" action="/crawl">
+{# x-data sits on the form, not on a wrapper around the two number
+   inputs: .filter-bar is a flex container whose labels are its flex
+   items, so a wrapper would change the layout. #}
+<form class="filter-bar" method="post" action="/crawl"
+      x-data="crawlCost" x-on:input="recalc">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <label>
     Page URL
@@ -67,6 +99,7 @@
     Top comments per post
     <input type="number" name="comments" value="{{ comments_value }}" min="0" max="100">
     <span class="muted">0 collects none. Each post asked for costs one extra page visit.</span>
+    <span class="muted" x-text="estimate" x-cloak></span>
   </label>
   <button class="button button-primary" type="submit">Crawl now</button>
 </form>
@@ -80,13 +113,23 @@
     <span class="badge {{ 'badge-completed' if status.exit_code == 0 else 'badge-failed' }}">{{ status.exit_code }}</span>
     {% if status.page_url %}<span class="muted">for {{ status.page_url }}</span>{% endif %}
   </p>
-  {% if status.lines %}
-  <pre class="source-view">{% for line in status.lines %}{{ line }}
-{% endfor %}</pre>
-  {% endif %}
   {% if last_run %}
   <p><a href="/runs/{{ last_run.id }}">See run #{{ last_run.id }} in /runs</a> — the posts list now shows what it stored.</p>
   {% endif %}
 </section>
+{% endif %}
+</div>
+
+{# Outside #crawl-panel on purpose. The poll replaces only this element's
+   innerHTML (the :innerHTML strategy on hx-select-oob above), so the <pre>
+   itself is never recreated and the browser keeps its scroll position for
+   free. Recreating it would reset scrollTop to 0 every two seconds. #}
+{# Rendered whenever a crawl is running or has finished -- NOT gated on
+   status.lines. An out-of-band swap can only replace an element that
+   already exists, so if this were absent for the first seconds of a crawl
+   the log would stay empty until the next full page load. #}
+{% if status.running or status.exit_code is not none %}
+<pre class="source-view" id="crawl-output">{% for line in status.lines %}{{ line }}
+{% endfor %}</pre>
 {% endif %}
 {% endblock %}

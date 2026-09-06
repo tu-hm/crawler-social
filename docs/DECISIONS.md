@@ -92,6 +92,7 @@ triggers, the verify checklist and the open questions),
 | [0063](#adr-0063) | Legal baseline: Law 91/2025 + Decree 356/2025, no exemption assumed | Decree 13/2023 was repealed on 2026-01-01. |
 | **F. v2 — local web viewer** | | |
 | [0064](#adr-0064) | The web viewer is read-only and loopback-bound by construction | The crawler is the single writer; snapshot HTML is untrusted. |
+| [0066](#adr-0066) | *Revisited (plans/v4)* — htmx + Alpine vendored as plain files | Still server-rendered, still no build step; one rendering path, four static files. |
 
 ---
 
@@ -1942,6 +1943,32 @@ rendering paths to keep in sync for no capability the tool actually needs.
 **Consequences.** Every action costs a page load, and live crawl output is a poll,
 not a stream. The win is that the rendered page is the whole contract: what the
 template renders is what the browser runs, and the CSP test greps prove it.
+
+**Revisited 2026-09-06 (plans/v4).** Two vendored files were added —
+`static/vendor/htmx.min.js` (2.0.6) and `static/vendor/alpine-csp.min.js` (3.14.9)
+— so that `/posts` filtering and `/crawl` polling swap a region instead of
+reloading the page. The 68 lines of imperative wiring htmx replaced — the filter
+auto-submit and the whole hand-rolled `/crawl` poll, with its own failure counter,
+backoff and `location.reload()` — became 6. `app.js` itself is about the same size
+(109 → 116 lines, 88 → 74 excluding comments), because three Alpine components moved
+in and two of them are new behaviour. **The decision itself stands.** Jinja still renders every page complete on the server; there is still no
+build step, no npm and no `node_modules`; and htmx re-requests the *same route* and
+selects a fragment out of the full response (`hx-select`), so "two rendering paths
+to keep in sync" is still rejected and there is still exactly one — asserted by
+`test_hx_request_header_changes_nothing`. What changed is the file count ("exactly
+two static files" is now four) and the consequence above: three interactions no
+longer cost a page load. The `/crawl` poll needs no client logic to stop, because
+the idle panel it swaps in carries no `hx-trigger`.
+
+Alpine had to be the `@alpinejs/csp` build: `script-src 'self'` carries no
+`unsafe-eval`, and stock Alpine reaches its evaluator through the async-function
+constructor. The two builds are indistinguishable by grepping for `Function(` — the
+marker is the string `CSP-friendly build`. htmx needs `includeIndicatorStyles:
+false`, because it otherwise injects a `<style>` element on init, which the CSP
+forbids; `allowScriptTags: false`; and `historyCacheSize: 0`, so rendered post text
+never reaches `sessionStorage` (ADR-0022). All of it is grep-tested in
+`tests/test_htmx_contract.py`, whose assertions were each verified to fail when the
+property they protect is broken.
 
 ---
 

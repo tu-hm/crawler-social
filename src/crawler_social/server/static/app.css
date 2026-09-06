@@ -511,6 +511,10 @@ pre.source-view .ln {
 
 @media (prefers-reduced-motion: reduce) {
   .skip-link { transition: none; }
+  /* The .htmx-indicator rules below carry their own transition. */
+  .htmx-request .htmx-indicator,
+  .htmx-request.htmx-indicator,
+  #results.htmx-request { transition: none; }
 }
 
 @media (max-width: 45rem) {
@@ -532,3 +536,28 @@ pre.source-view .ln {
   .post-cell { max-width: 18rem; }
   .site-header { position: static; }
 }
+
+/* --- Vendored library support (plans/v4) --------------------------------- */
+
+/* htmx injects these three rules itself unless includeIndicatorStyles is
+   false, and an injected <style> element violates style-src 'self'. Copied
+   from htmx 2.0.6 verbatim so the behaviour is identical to its default:
+   note the transition sits on the .htmx-request selectors, so an indicator
+   fades in but not out. */
+.htmx-indicator { opacity: 0; }
+.htmx-request .htmx-indicator { opacity: 1; transition: opacity 200ms ease-in; }
+.htmx-request.htmx-indicator { opacity: 1; transition: opacity 200ms ease-in; }
+
+/* hx-indicator="#results" puts .htmx-request on the results region while a
+   filter or page request is in flight. Without a rule of its own that class
+   would be inert -- there is no .htmx-indicator element to reveal -- so the
+   region dims instead of flickering between two states. */
+#results.htmx-request {
+  opacity: 0.55;
+  transition: opacity 120ms ease-in;
+}
+
+/* Alpine removes x-cloak once it has initialised the component. Without
+   this rule -- or without JavaScript at all -- an element that exists only
+   to show an Alpine state would be visible as a dead control. */
+[x-cloak] { display: none !important; }
