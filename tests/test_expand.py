@@ -17,8 +17,21 @@ from crawler_social import facebook
 
 
 class FakeElement:
-    def __init__(self, name: str, *, visible=True, raises=False, on_click=None):
+    def __init__(
+        self,
+        name: str,
+        *,
+        text=None,
+        attrs=None,
+        visible=True,
+        raises=False,
+        on_click=None,
+    ):
         self.name = name
+        #: A real expander's label is its own visible text; an icon-only
+        #: menu button has an aria-label and no text at all.
+        self.text = name if text is None else text
+        self.attrs = dict(attrs or {})
         self._visible = visible
         self._raises = raises
         self._on_click = on_click
@@ -26,6 +39,12 @@ class FakeElement:
 
     def is_visible(self, timeout=None):
         return self._visible
+
+    def get_attribute(self, attr, timeout=None):
+        return self.attrs.get(attr)
+
+    def inner_text(self, timeout=None):
+        return self.text
 
     def click(self, timeout=None, no_wait_after=None):
         if self._raises:
@@ -39,6 +58,10 @@ class FakeLocator:
     def __init__(self, elements):
         self._elements = elements
 
+    @property
+    def first(self):
+        return self._elements[0] if self._elements else FakeElement("", visible=False)
+
     def count(self):
         return len(self._elements)
 
@@ -46,19 +69,72 @@ class FakeLocator:
         return self._elements[index]
 
 
-class FakePage:
-    """A page whose matching buttons vanish as they are clicked."""
+class FakeScope:
+    """What the feed/article selector resolves to: a sub-tree to search."""
 
-    def __init__(self, buttons, url="https://www.facebook.com/P"):
+    def __init__(self, page, elements):
+        self.page = page
+        self.elements = elements
+
+    def count(self):
+        return len(self.elements)
+
+    def get_by_role(self, role, name=None):
+        return self.page._buttons(self.elements, role, name)
+
+
+class FakeKeyboard:
+    def __init__(self):
+        self.pressed: list[str] = []
+
+    def press(self, key):
+        self.pressed.append(key)
+
+
+class FakePage:
+    """A page whose matching buttons vanish as they are clicked.
+
+    `buttons` sit inside post articles; `chrome` sit outside them, where the
+    group header and tab bar live.
+    """
+
+    def __init__(
+        self,
+        buttons,
+        url="https://www.facebook.com/P",
+        chrome=(),
+        content=True,
+        popup=False,
+    ):
         self.buttons = list(buttons)
+        self.chrome = list(chrome)
+        self.has_content = content
+        self.popup = popup
         self.url = url
         self.roles_queried: list[str] = []
         self.waits = 0
         self.went_back = 0
+        self.keyboard = FakeKeyboard()
+
+    def _buttons(self, elements, role, name):
+        self.roles_queried.append(role)
+        return FakeLocator(
+            [
+                element
+                for element in elements
+                if not element.clicked
+                and (name is None or name.search(element.name))
+            ]
+        )
 
     def get_by_role(self, role, name=None):
-        self.roles_queried.append(role)
-        return FakeLocator([b for b in self.buttons if not b.clicked])
+        return self._buttons(self.buttons + self.chrome, role, name)
+
+    def locator(self, selector):
+        if selector == facebook._CONTENT_ROOTS:
+            self.roles_queried.append("content")
+            return FakeScope(self, self.buttons if self.has_content else [])
+        return FakeLocator([FakeElement("popup")] if self.popup else [])
 
     def wait_for_timeout(self, ms):
         self.waits += 1
@@ -78,18 +154,19 @@ def test_every_visible_see_more_is_clicked_once():
     assert [b.clicked for b in page.buttons] == [1, 1, 1]
 
 
-def test_only_buttons_are_queried():
+def test_only_buttons_are_clicked():
     """A link click could navigate away mid-capture; a button cannot (D2)."""
     page = FakePage([FakeElement("See more")])
     facebook.expand_post_text(page, OPTIONS, RNG)
-    assert set(page.roles_queried) == {"button"}
+    assert "link" not in page.roles_queried
+    assert "button" in page.roles_queried
 
 
 def test_the_dom_is_requeried_after_each_click():
     page = FakePage([FakeElement("See more") for _ in range(3)])
     facebook.expand_post_text(page, OPTIONS, RNG)
     # One query per click, plus the final one that finds nothing left.
-    assert len(page.roles_queried) == 4
+    assert page.roles_queried.count("button") == 4
 
 
 def test_click_budget_is_a_hard_ceiling():
@@ -139,6 +216,11 @@ def test_a_dead_page_ends_the_loop_without_raising():
         def get_by_role(self, role, name=None):
             raise RuntimeError("Target page, context or browser has been closed")
 
+        def locator(self, selector):
+            raise RuntimeError("Target page, context or browser has been closed")
+
+    # The scope lookup fails too, so expansion falls back to the dead page.
+
     assert facebook.expand_post_text(DeadPage([]), OPTIONS, RNG) == 0
 
 
@@ -160,3 +242,82 @@ def test_see_more_pattern_does_not_match_comment_labels(label, expanding):
     assert bool(facebook.SEE_MORE_PATTERN.search(label)) is expanding
     if not expanding:
         assert facebook.MORE_COMMENTS_PATTERN.search(label)
+
+
+# --- The group-page trap: buttons that *are* named "Xem them" -------------
+#
+# On a group page the header kebab, the tab-bar overflow and the post action
+# menu all carry the accessible name "Xem them" / "More". Matching on the
+# accessible name alone made expansion click those menus instead of the text.
+
+
+def test_a_menu_button_named_see_more_is_not_clicked():
+    """The group options kebab: labelled "Xem thêm", opens a menu."""
+    kebab = FakeElement("Xem thêm", text="", attrs={"aria-haspopup": "menu"})
+    page = FakePage([kebab])
+    assert facebook.expand_post_text(page, OPTIONS, RNG) == 0
+    assert kebab.clicked == 0
+
+
+def test_an_icon_only_button_is_not_clicked():
+    """No visible text of its own means the label came from aria-label."""
+    icon = FakeElement("See more", text="")
+    page = FakePage([icon])
+    assert facebook.expand_post_text(page, OPTIONS, RNG) == 0
+    assert icon.clicked == 0
+
+
+def test_an_expanded_toggle_is_not_clicked():
+    toggle = FakeElement("More", attrs={"aria-expanded": "false"})
+    page = FakePage([toggle])
+    assert facebook.expand_post_text(page, OPTIONS, RNG) == 0
+    assert toggle.clicked == 0
+
+
+def test_group_chrome_outside_the_feed_is_never_reached():
+    """Expansion searches the feed, where the only real expanders are."""
+    header = FakeElement("Xem thêm")
+    body = FakeElement("Xem thêm")
+    page = FakePage([body], chrome=[header])
+    assert facebook.expand_post_text(page, OPTIONS, RNG) == 1
+    assert body.clicked == 1
+    assert header.clicked == 0
+
+
+def test_the_whole_page_is_searched_when_there_is_no_feed():
+    loose = FakeElement("See more")
+    page = FakePage([], chrome=[loose], content=False)
+    assert facebook.expand_post_text(page, OPTIONS, RNG) == 1
+    assert loose.clicked == 1
+
+
+def test_a_menu_opened_by_a_click_is_dismissed():
+    """Belt and braces: whatever slips through does not swallow later clicks."""
+    page = FakePage([FakeElement("See more")], popup=True)
+    facebook.expand_post_text(page, OPTIONS, RNG)
+    assert page.keyboard.pressed == ["Escape"]
+
+
+def test_a_stray_button_does_not_stop_the_real_ones():
+    kebab = FakeElement("Xem thêm", text="", attrs={"aria-haspopup": "menu"})
+    real = FakeElement("Xem thêm")
+    page = FakePage([kebab, real])
+    assert facebook.expand_post_text(page, OPTIONS, RNG) == 1
+    assert real.clicked == 1
+
+
+@pytest.mark.parametrize(
+    "label, expanding",
+    [
+        ("See more", True),
+        ("... More", True),
+        ("Xem thêm", True),
+        # Group chrome labels that must never look like an expander.
+        ("More options", False),
+        ("Xem thêm tùy chọn", False),
+        ("See more options", False),
+        ("Xem thêm về nhóm này", False),
+    ],
+)
+def test_see_more_pattern_is_anchored(label, expanding):
+    assert bool(facebook.SEE_MORE_PATTERN.search(label)) is expanding

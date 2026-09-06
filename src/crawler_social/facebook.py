@@ -46,13 +46,20 @@ CLICK_TIMEOUT_MS = 1500
 #: How many matches of a label pattern are examined for a visible one.
 _SCAN_LIMIT = 25
 
-#: Anchored against the *accessible name*, so "Xem them binh luan" ("view
-#: more comments") cannot match the plain "see more" that expands a body.
+#: Anchored, so "Xem them binh luan" ("view more comments") cannot match the
+#: plain "see more" that expands a body. A leading ellipsis is optional
+#: because Facebook renders the truncation mark inside the button on some
+#: surfaces ("... More").
 SEE_MORE_PATTERN = re.compile(
-    r"^\s*(?:see\s+more|xem\s+th\u00eam|voir\s+plus|mehr\s+anzeigen|"
-    r"ver\s+m\u00e1s|\u2026\s*more|more)\s*$",
+    r"^\s*(?:\u2026|\.{3})?\s*(?:see\s+more|xem\s+th\u00eam|voir\s+plus|"
+    r"mehr\s+anzeigen|ver\s+m\u00e1s|more)\s*$",
     re.IGNORECASE,
 )
+#: Attributes that mark a control as opening a menu, so it is never a text
+#: expander. A group page is full of them: the header kebab, the tab-bar
+#: overflow and the per-post action menu all carry the accessible name
+#: "Xem them" / "More", which is exactly what SEE_MORE_PATTERN matches.
+_MENU_ATTRS = ("aria-haspopup", "aria-expanded")
 #: Deliberately unanchored: Facebook renders counts inside the label.
 MORE_COMMENTS_PATTERN = re.compile(
     r"(?:view|load|see)\s+(?:\d[\d.,]*\s+)?(?:more\s+|previous\s+)?comments?"
@@ -320,6 +327,63 @@ class CaptureOptions:
     max_expand_clicks: int = 12
 
 
+def _is_text_expander(element) -> bool:
+    """True when this button really un-truncates text, not opens a menu.
+
+    `get_by_role(name=...)` matches the *accessible name*, which for an
+    icon-only control comes from its `aria-label`. On a group page several
+    menu buttons are labelled "Xem them" / "More" and match SEE_MORE_PATTERN
+    exactly, so clicking on name alone opens the group options menu instead
+    of expanding a post. A genuine expander is different in two ways: it
+    carries no menu semantics, and the label is its own visible text.
+    """
+    try:
+        for attr in _MENU_ATTRS:
+            if element.get_attribute(attr, timeout=CLICK_TIMEOUT_MS):
+                return False
+        text = element.inner_text(timeout=CLICK_TIMEOUT_MS)
+    except Exception:  # noqa: BLE001 - unreadable element is not clickable
+        return False
+    return bool(SEE_MORE_PATTERN.search((text or "").strip()))
+
+
+#: Where readable content lives. Both roles are needed: on a group feed the
+#: post bodies sit directly under `role="feed"` and only the *comments* carry
+#: `role="article"`, while a permalink page has articles and no feed. Group
+#: chrome -- header, tab bar, right rail, chat -- is outside both, and that is
+#: where the look-alike menu buttons are.
+_CONTENT_ROOTS = '[role="feed"], [role="article"]'
+
+
+def _in_content(page):
+    """Scope a search to the feed/article containers when the page has any."""
+    try:
+        roots = page.locator(_CONTENT_ROOTS)
+        if roots.count():
+            return roots
+    except Exception:  # noqa: BLE001 - fall back to the whole page
+        pass
+    return page
+
+
+def _dismiss_popup(page) -> bool:
+    """Close a menu or dialog that a click opened. True when one was closed.
+
+    A belt-and-braces step: if a look-alike button still slips through the
+    filter, the menu it opened is closed immediately instead of swallowing
+    the clicks that follow.
+    """
+    try:
+        popup = page.locator('[role="menu"], [role="dialog"]').first
+        if not popup.is_visible(timeout=CLICK_TIMEOUT_MS):
+            return False
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(200)
+        return True
+    except Exception:  # noqa: BLE001 - best effort only
+        return False
+
+
 def _click_repeatedly(
     page,
     pattern: "re.Pattern[str]",
@@ -328,6 +392,8 @@ def _click_repeatedly(
     rng: random.Random,
     settle_ms: int = 250,
     on_click: Callable[[], bool] | None = None,
+    accept: Callable[[object], bool] | None = None,
+    scope: Callable[[object], object] | None = None,
 ) -> int:
     """Click every visible button whose accessible name matches `pattern`.
 
@@ -338,12 +404,16 @@ def _click_repeatedly(
     Only `role="button"` is clicked (D2), so an expansion click can never be
     a link that navigates away from the page being captured.
 
+    `scope` narrows where matches are looked for and `accept` vets each
+    candidate before it is clicked; both default to no restriction.
+
     Returns the number of clicks that landed.
     """
     clicks = 0
     while clicks < max_clicks:
         try:
-            matches = page.get_by_role("button", name=pattern)
+            root = scope(page) if scope is not None else page
+            matches = root.get_by_role("button", name=pattern)
             total = min(matches.count(), _SCAN_LIMIT)
         except Exception:  # noqa: BLE001 - a dead locator ends the loop
             break
@@ -352,6 +422,8 @@ def _click_repeatedly(
             element = matches.nth(index)
             try:
                 if not element.is_visible(timeout=CLICK_TIMEOUT_MS):
+                    continue
+                if accept is not None and not accept(element):
                     continue
                 element.click(timeout=CLICK_TIMEOUT_MS, no_wait_after=True)
             except Exception:  # noqa: BLE001 - stale or covered; try the next
@@ -392,6 +464,7 @@ def expand_post_text(
     expected = url or page.url or ""
 
     def still_here() -> bool:
+        _dismiss_popup(page)
         if not expected:
             return True
         if _same_page(page.url, expected):
@@ -410,6 +483,8 @@ def expand_post_text(
         max_clicks=options.max_expand_clicks,
         rng=rng,
         on_click=still_here,
+        accept=_is_text_expander,
+        scope=_in_content,
     )
 
 
@@ -555,6 +630,8 @@ def _expand_comments(page, options: CommentOptions, rng: random.Random) -> None:
         SEE_MORE_PATTERN,
         max_clicks=options.max_expand_clicks,
         rng=rng,
+        accept=_is_text_expander,
+        scope=_in_content,
     )
 
 

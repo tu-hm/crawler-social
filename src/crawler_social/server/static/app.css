@@ -199,10 +199,10 @@ h2 { font-size: 1rem; margin: 0 0 0.75rem; }
   vertical-align: top;
 }
 .data-table thead th {
-  position: sticky;
-  top: 3.25rem; /* below the sticky site header */
+  /* Deliberately not sticky: .table-scroll must be a scroll container so wide
+     tables scroll sideways, which makes it the sticky scrollport instead of
+     the viewport and drops the header row on top of the first data row. */
   background: var(--bg-raised);
-  z-index: 5;
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
