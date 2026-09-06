@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import re
 import signal
+import subprocess
 import sys
 import time
 import types
@@ -41,6 +42,19 @@ class FakeProc:
         Recorder.calls.append((argv, kwargs))
 
     def poll(self):
+        return self._poll_result
+
+    def wait(self, timeout=None):
+        # Model a real Popen.wait: block for up to `timeout`, then raise
+        # TimeoutExpired if the child is still going. The stop watchdog
+        # depends on that blocking, so returning at once would make it
+        # look like it escalates instantly.
+        if self._poll_result is None and timeout is not None:
+            time.sleep(timeout)
+        if self._poll_result is None:
+            if timeout is not None:
+                raise subprocess.TimeoutExpired(self.argv, timeout)
+            return None
         return self._poll_result
 
     def send_signal(self, sig):
@@ -122,9 +136,25 @@ def test_shell_metacharacters_stay_one_argument():
     assert kwargs["shell"] is False
 
 
-def test_gui_failure_names_display():
-    # The real check_gui_session with an empty env raises the DISPLAY
-    # message; start passes it through as a JobRefused.
+def test_gui_check_on_linux_names_display():
+    # The real check_gui_session, pinned to the Linux branch so the
+    # assertion holds on any host: macOS has no DISPLAY to look at and
+    # returns early by design, which used to fail this test there.
+    from crawler_social.facebook import check_gui_session
+
+    with pytest.raises(CaptureError, match="DISPLAY"):
+        check_gui_session({}, platform="linux")
+    # ...and the darwin branch is deliberately permissive.
+    check_gui_session({}, platform="darwin")
+
+
+def test_gui_failure_is_passed_through_as_job_refused(monkeypatch):
+    # start() turns a CaptureError from the GUI check into a JobRefused
+    # carrying the same message, and starts nothing.
+    def refuse(env=None, **kwargs):
+        raise CaptureError("No graphical session found: DISPLAY is empty.")
+
+    monkeypatch.setattr(jobs, "check_gui_session", refuse)
     with pytest.raises(JobRefused, match="DISPLAY"):
         jobs.crawl_job.start(HTTPS_PAGE, 5, env={})
     assert Recorder.calls == []
@@ -179,7 +209,9 @@ def test_post_refusal_renders_the_reason(client: TestClient, monkeypatch):
         data={"page_url": HTTPS_PAGE, "limit": "5", "csrf_token": token},
         headers={"Origin": "http://testserver"},
     )
-    assert resp.status_code == 200
+    # 409, not 200: nothing was started, so the refusal is not a
+    # successful page view for a client or a cache to treat as one.
+    assert resp.status_code == 409
     assert "DISPLAY is empty" in resp.text  # the reason is shown, not hidden
     assert Recorder.calls == []
 
@@ -231,6 +263,31 @@ def test_stop_sends_sigterm_first_not_sigkill():
     jobs.crawl_job._stop_sent_at = time.monotonic() - 11
     jobs.crawl_job.stop()
     assert fake.killed is True
+
+
+def test_stop_escalates_on_its_own_after_the_grace_period(monkeypatch):
+    # One click of Stop has to be enough. The escalation used to need a
+    # second stop() the UI never made, so a crawl that ignored SIGTERM
+    # was never killed; a watchdog thread now does it.
+    monkeypatch.setattr(jobs, "STOP_GRACE_SECONDS", 0.05)
+    jobs.crawl_job.start(HTTPS_PAGE, 5, env=DESKTOP_ENV)
+    fake = jobs.crawl_job._process
+    assert jobs.crawl_job.stop() is True
+    assert fake.signals == [signal.SIGTERM]
+    deadline = time.monotonic() + 3
+    while not fake.killed and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert fake.killed is True, "the watchdog never escalated to SIGKILL"
+
+
+def test_stop_does_not_kill_a_crawl_that_exits_within_the_grace_period(monkeypatch):
+    monkeypatch.setattr(jobs, "STOP_GRACE_SECONDS", 0.5)
+    jobs.crawl_job.start(HTTPS_PAGE, 5, env=DESKTOP_ENV)
+    fake = jobs.crawl_job._process
+    jobs.crawl_job.stop()
+    fake.finish(0)  # honoured SIGTERM and wrapped up
+    time.sleep(0.7)
+    assert fake.killed is False
 
 
 def test_stop_is_a_noop_when_nothing_runs():

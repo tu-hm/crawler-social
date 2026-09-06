@@ -91,14 +91,12 @@ class CrawlJob:
         comments_max_posts: int | None = None,
         env: dict | None = None,
     ) -> None:
-        """Spawn `crawler crawl` for page_url, or raise JobRefused."""
-        with self._lock:
-            if self._process is not None and self._process.poll() is None:
-                raise JobRefused(
-                    "A crawl is already running. Wait for it to finish or stop it first."
-                )
-            self.reset_locked()
+        """Spawn `crawler crawl` for page_url, or raise JobRefused.
 
+        Validation runs before any state is touched, so a refused start
+        leaves the previous crawl's log and exit code intact instead of
+        clearing them and then reporting a stale exit code with no URL.
+        """
         page_url = validate_page_url(page_url)
         try:
             check_gui_session(env)
@@ -118,37 +116,70 @@ class CrawlJob:
             argv += ["--comments", str(int(comments))]
             if comments_max_posts:
                 argv += ["--comments-max-posts", str(int(comments_max_posts))]
-        # A list argv with shell=False: the URL is one argument, never a
-        # shell string, so metacharacters cannot be interpreted.
-        proc = subprocess.Popen(  # noqa: S603
-            argv,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            shell=False,
-        )
+
+        # The "already running" check and the spawn are one critical
+        # section. Split apart, two simultaneous POSTs both passed the
+        # check and both spawned a crawl.
         with self._lock:
+            if self._process is not None and self._process.poll() is None:
+                raise JobRefused(
+                    "A crawl is already running. Wait for it to finish or stop it first."
+                )
+            self.reset_locked()
+            self._process = None
+            try:
+                # A list argv with shell=False: the URL is one argument,
+                # never a shell string, so metacharacters cannot be
+                # interpreted.
+                proc = subprocess.Popen(  # noqa: S603
+                    argv,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    shell=False,
+                )
+            except OSError as exc:
+                raise JobRefused(f"Could not start the crawler: {exc}") from exc
             self._process = proc
             self._page_url = page_url
             self._limit = int(limit)
             self._started_at = time.monotonic()
-            self._stop_requested = False
-            self._stop_sent_at = None
         threading.Thread(target=self._pump, args=(proc,), daemon=True).start()
 
     def stop(self) -> bool:
-        """SIGTERM first; a later call after the grace period SIGKILLs."""
+        """SIGTERM, then SIGKILL once the grace period is up.
+
+        One click of Stop has to be enough: the escalation used to need a
+        second call after the grace period, which the UI never makes, so
+        a crawl that ignored SIGTERM was never killed. A watchdog thread
+        does it instead; a second call still escalates immediately.
+        """
         with self._lock:
             proc = self._process
             if proc is None or proc.poll() is not None:
                 return False
             now = time.monotonic()
-            if self._stop_sent_at is None:
+            first = self._stop_sent_at is None
+            if first:
                 self._stop_requested = True
                 self._stop_sent_at = now
                 proc.send_signal(signal.SIGTERM)
             elif now - self._stop_sent_at > STOP_GRACE_SECONDS:
                 proc.kill()
+        if first:
+            threading.Thread(
+                target=self._escalate, args=(proc,), daemon=True
+            ).start()
         return True
+
+    def _escalate(self, proc) -> None:
+        """Watchdog body: SIGKILL a child that outlived the grace period."""
+        try:
+            proc.wait(timeout=STOP_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except OSError:  # already gone
+                pass
 
     # -- reporting ---------------------------------------------------------
 
@@ -194,16 +225,35 @@ class CrawlJob:
         self._stop_sent_at = None
 
     def _pump(self, proc) -> None:
-        """Reader thread body: stdout (+merged stderr) into the ring buffer."""
+        """Reader thread body: stdout (+merged stderr) into the ring buffer.
+
+        Also closes the pipe and reaps the child. Without the wait the
+        exit code was only recorded if something happened to call
+        `status()` again, and the finished child stayed a zombie until
+        then.
+        """
         assert proc.stdout is not None
-        for raw in iter(proc.stdout.readline, b""):
-            line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+        try:
+            for raw in iter(proc.stdout.readline, b""):
+                line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                with self._lock:
+                    self._lines.append(line)
+                    if len(self._lines) > MAX_LINES:
+                        drop = len(self._lines) - MAX_LINES
+                        del self._lines[:drop]
+                        self._lines_dropped += drop
+        finally:
+            try:
+                proc.stdout.close()
+            except OSError:
+                pass
+            try:
+                returncode = proc.wait()
+            except Exception:  # pragma: no cover -- defensive
+                returncode = None
             with self._lock:
-                self._lines.append(line)
-                if len(self._lines) > MAX_LINES:
-                    drop = len(self._lines) - MAX_LINES
-                    del self._lines[:drop]
-                    self._lines_dropped += drop
+                if proc is self._process and self._exit_code is None:
+                    self._exit_code = returncode
 
 
 #: The one job slot. The server process has exactly one at any time.

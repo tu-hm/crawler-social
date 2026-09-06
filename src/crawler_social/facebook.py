@@ -107,12 +107,20 @@ class BrowserClosedError(CaptureError):
     """The browser window went away mid-run."""
 
 
-def check_gui_session(env: dict[str, str] | None = None) -> None:
-    """Fail clearly when no logged-in graphical session exists."""
+def check_gui_session(
+    env: dict[str, str] | None = None, *, platform: str | None = None
+) -> None:
+    """Fail clearly when no logged-in graphical session exists.
+
+    `platform` defaults to the host and exists so the Linux branch can be
+    exercised from a test on any machine, the same way
+    `resolve_browser_binary` takes one.
+    """
     env = env if env is not None else dict(__import__("os").environ)
-    if sys.platform == "darwin":
+    platform = platform if platform is not None else sys.platform
+    if platform == "darwin":
         return
-    if sys.platform.startswith("linux"):
+    if platform.startswith("linux"):
         if not env.get("DISPLAY") and not env.get("WAYLAND_DISPLAY"):
             raise CaptureError(
                 "No graphical session found: DISPLAY and WAYLAND_DISPLAY are "

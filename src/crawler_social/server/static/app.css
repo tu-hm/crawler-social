@@ -243,7 +243,11 @@ h2 { font-size: 1rem; margin: 0 0 0.75rem; }
   color: var(--fg-muted);
   margin-bottom: 0.2rem;
 }
-input[type="text"], input[type="search"], input[type="date"], select {
+/* Every text-ish control, not just the three the filter bars started with:
+   the /crawl form's url and number inputs were falling through to the
+   browser's own widget styling. */
+input[type="text"], input[type="search"], input[type="date"],
+input[type="url"], input[type="number"], select {
   background: var(--bg);
   color: var(--fg);
   border: 1px solid var(--border);
@@ -252,10 +256,29 @@ input[type="text"], input[type="search"], input[type="date"], select {
   font: inherit;
   font-size: 0.88rem;
 }
-input:focus-visible, select:focus-visible, a.button:focus-visible {
+input[type="url"] { min-width: min(24rem, 100%); }
+
+/* :focus-visible must cover <button> too, or keyboard users get no ring on
+   Filter, Crawl now, Stop, or Copy text. */
+input:focus-visible, select:focus-visible, button:focus-visible,
+a:focus-visible, a.button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* A bare submit button in a filter bar should look like the others. */
+.filter-bar button, .page-size-form button {
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 0.35rem 0.8rem;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.filter-bar button:hover, .page-size-form button:hover { background: var(--bg-inset); }
 
 .button {
   display: inline-block;
@@ -264,6 +287,9 @@ input:focus-visible, select:focus-visible, a.button:focus-visible {
   color: var(--fg);
   border-radius: 6px;
   padding: 0.35rem 0.8rem;
+  /* font-family too: a <button class="button"> does not inherit the body
+     font, so the label rendered in the browser's default face. */
+  font-family: inherit;
   font-size: 0.85rem;
   font-weight: 500;
   cursor: pointer;
@@ -460,12 +486,49 @@ pre.source-view .ln {
   width: 1px;
   height: 1px;
   overflow: hidden;
-  clip: rect(0 0 0 0);
+  /* clip-path, not the deprecated clip property. */
+  clip-path: inset(50%);
   white-space: nowrap;
+  border: 0;
+  padding: 0;
+  margin: -1px;
+}
+
+/* Off-screen until focused, then a normal button in the top-left. */
+.skip-link {
+  position: absolute;
+  left: 0.5rem;
+  top: -3rem;
+  z-index: 20;
+  background: var(--bg-raised);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.8rem;
+  transition: top 0.12s ease-in-out;
+}
+.skip-link:focus { top: 0.5rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .skip-link { transition: none; }
 }
 
 @media (max-width: 45rem) {
   .db-path { display: none; }
   .facts, .detail-grid { grid-template-columns: 1fr; }
   .facts dd, .detail-grid dd { margin-bottom: 0.4rem; }
+  /* A one-line clipped excerpt is unreadable in a phone-width column, and
+     the table already scrolls sideways; let the text wrap instead. */
+  .excerpt, .post-link {
+    white-space: normal;
+    text-overflow: clip;
+    max-width: none;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .post-cell { max-width: 18rem; }
+  .site-header { position: static; }
 }

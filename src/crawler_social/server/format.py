@@ -16,11 +16,17 @@ from markupsafe import Markup
 
 
 def format_bytes(n: float) -> str:
-    for unit in ("B", "KB", "MB", "GB"):
-        if abs(n) < 1024 or unit == "GB":
-            return f"{n:.1f} {unit}" if unit != "B" else f"{int(n)} B"
+    """Byte count as a display string. The ladder tops out at TB.
+
+    The last unit is the catch-all, so a value beyond it reads as e.g.
+    "2048.0 TB" rather than falling out of the ladder.
+    """
+    units = ("B", "KB", "MB", "GB", "TB")
+    for unit in units:
+        if abs(n) < 1024 or unit == units[-1]:
+            return f"{int(n)} B" if unit == "B" else f"{n:.1f} {unit}"
         n /= 1024
-    return f"{n:.1f} GB"
+    return f"{n:.1f} {units[-1]}"
 
 
 def excerpt(text: str | None, length: int = 180) -> str:
@@ -29,7 +35,34 @@ def excerpt(text: str | None, length: int = 180) -> str:
     collapsed = " ".join(text.split())
     if len(collapsed) <= length:
         return collapsed
-    return collapsed[: length - 1].rstrip() + "…"
+    return collapsed[: max(length - 1, 0)].rstrip() + "…"
+
+
+def snippet(text: str | None, term: str | None, length: int = 180) -> str:
+    """An excerpt centred on the first match of `term`.
+
+    `excerpt` always takes the head of the text, so a search hit past the
+    cut-off produced a row with no visible reason it matched. This keeps
+    the window over the match instead, marking each trimmed end with an
+    ellipsis. With no term, or no match, it degrades to `excerpt`.
+    """
+    if not text or not term:
+        return excerpt(text, length)
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= length:
+        return collapsed
+    found = collapsed.lower().find(term.lower())
+    if found == -1:
+        return excerpt(collapsed, length)
+    # Keep a third of the window as lead-in so the match is not flush left.
+    lead = max(length // 3, 0)
+    start = max(0, min(found - lead, len(collapsed) - length))
+    end = start + length
+    return (
+        ("…" if start > 0 else "")
+        + collapsed[start:end].strip()
+        + ("…" if end < len(collapsed) else "")
+    )
 
 
 def relative_age(stored: str | None, *, now: datetime | None = None) -> str:

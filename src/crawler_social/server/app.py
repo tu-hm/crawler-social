@@ -15,7 +15,7 @@ import sys
 import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import AsyncIterator, Iterator
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -70,7 +70,7 @@ class DatabaseUnavailable(Exception):
 
 
 @asynccontextmanager
-async def _lifespan(app: FastAPI) -> Iterator[None]:
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Nothing to open at startup: connections are per-request on purpose.
     yield
 
@@ -86,6 +86,25 @@ def get_conn(request: Request) -> Iterator[sqlite3.Connection]:
         yield conn
     finally:
         conn.close()
+
+
+def _allow_head(routes) -> None:
+    """Let HEAD answer wherever GET does, recursing into nested routers.
+
+    Starlette's plain Route adds HEAD to a GET route automatically;
+    FastAPI's APIRoute does not, so every path here answered 405 to a
+    HEAD request -- including /healthz, which exists for supervisor
+    probes, and several of those send HEAD. An included router is one
+    object holding its own route list, so the walk has to recurse or the
+    whole /api surface is missed.
+    """
+    for route in routes:
+        methods = getattr(route, "methods", None)
+        if methods and "GET" in methods:
+            methods.add("HEAD")
+        nested = getattr(route, "routes", None)
+        if nested:
+            _allow_head(nested)
 
 
 def create_app(config: Config) -> FastAPI:
@@ -126,6 +145,10 @@ def create_app(config: Config) -> FastAPI:
     )
     from .templating import STATIC_DIR
 
+    # Before include_router: FastAPI wraps an included router in one
+    # opaque object, so the routes have to be adjusted while they are
+    # still reachable on the router itself.
+    _allow_head(api_router.routes)
     app.include_router(api_router)
     app.mount(
         "/static",
@@ -204,8 +227,6 @@ def create_app(config: Config) -> FastAPI:
             status_code=500,
         )
 
-    install_hardening(app, token=config.serve_token)
-
     @app.get("/healthz")
     def healthz(request: Request) -> dict:
         # Must answer even without a database, so it never touches get_conn.
@@ -216,6 +237,12 @@ def create_app(config: Config) -> FastAPI:
             "db_present": config_.db_path.exists(),
             "version": __version__,
         }
+
+    _allow_head(app.routes)
+
+    # Installed last so the middleware stack wraps every route above,
+    # including /healthz.
+    install_hardening(app, token=config.serve_token)
 
     return app
 
