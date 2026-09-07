@@ -34,11 +34,9 @@ class RunSummary:
     existing_posts: int
     errors: int
     diagnostics: list[str]
-    #: Set when Facebook served a wall instead of content: the verdict kind
-    #: ("login_wall", "checkpoint", "rate_limited", "unavailable").
+    #: Verdict kind when Facebook served a wall instead of content.
     blocked: Optional[str] = None
     blocked_message: Optional[str] = None
-    #: Comment pass (v3). Both zero when the pass did not run.
     comments_captured: int = 0
     posts_with_comments: int = 0
 
@@ -140,8 +138,6 @@ def _collect_comments(
             summary.errors += len(diagnostics)
             if not comments:
                 continue
-            # One transaction per post: a post's comments land whole or not
-            # at all, and a later post's failure cannot undo an earlier one.
             with db.transaction(conn):
                 for comment in comments:
                     db.upsert_comment(
@@ -212,9 +208,7 @@ def run_crawl(
         limit_reached = False
         blocked: Optional[facebook.BlockedError] = None
 
-        # A wall stops capture but must not discard posts already parsed from
-        # earlier, legitimate snapshots -- so it is caught around the loop and
-        # the commit below still runs.
+        # Caught around the loop so posts from earlier snapshots still commit.
         try:
             for captured_at, html in facebook.capture_snapshots(
                 page_url,
@@ -271,7 +265,6 @@ def run_crawl(
         if stop.requested and status != "interrupted":
             status = "interrupted"
 
-        # Commit parsed posts and state together; on failure neither advances.
         with db.post_transaction(conn):
             for post, _known in pending_posts:
                 db.upsert_post(
@@ -283,14 +276,12 @@ def run_crawl(
                     post.published_at,
                     post_url=post.url,
                 )
-            # A blocked run saw an incomplete feed, so its newest post is not
-            # a trustworthy watermark. Store the posts, hold the state.
+            # A blocked run saw an incomplete feed: store posts, hold state.
             if pending_posts and blocked is None:
                 newest = pending_posts[0][0]
                 db.set_state(conn, page_url, newest.post_id, newest.published_at)
 
-        # Comments come after the post transaction, so a comment failure can
-        # never cost posts that are already safely committed (D6).
+        # After the post transaction, so a comment failure cannot cost posts (D6).
         if blocked is None and top_comments > 0 and not stop.requested:
             comment_blocked = _collect_comments(
                 conn,

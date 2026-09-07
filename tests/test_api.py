@@ -1,4 +1,4 @@
-"""Required tests from plans/v2/03-json-api.md."""
+"""Tests for the JSON API."""
 
 from __future__ import annotations
 
@@ -30,7 +30,6 @@ def seeded(db_file: Path) -> Path:
                 )
                 for i in range(60)
             ],
-            # one post with an id that needs escaping, and HTML-ish text
             (
                 "12/3%4", "https://a.example", "<b>bold</b> & text",
                 "Ann", "2026-01-05T10:00:00+00:00", "2026-01-05T09:00:00+00:00",
@@ -180,7 +179,7 @@ def test_snapshots_metadata_only(client):
     for item in body["items"]:
         assert "size_bytes" in item
         assert "html" not in item
-    assert b"<html>" not in resp.content  # the blob never rides a list view
+    assert b"<html>" not in resp.content
 
 
 def test_run_id_filter_on_snapshots(client):
@@ -211,9 +210,6 @@ def test_export_csv_filtered_with_header_and_disposition(client):
     data = rows[1:]
     assert len(data) == 30
     assert all(row[1] == "https://b.example" for row in data)
-
-
-# -- v3: comments ------------------------------------------------------------
 
 
 def seed_comments(db_file: Path) -> None:

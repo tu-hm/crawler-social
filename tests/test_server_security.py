@@ -1,4 +1,4 @@
-"""Required tests from plans/v2/09-hardening.md."""
+"""Tests for server hardening."""
 
 from __future__ import annotations
 
@@ -23,7 +23,6 @@ SHORT_TOKEN = "abcdefghij"
 
 HTML_ROUTES = ["/", "/posts", "/snapshots", "/runs", "/state", "/crawl"]
 
-# The full route table, HTML and API, used for the 0o444 read-only sweep.
 ALL_GET_ROUTES = [
     "/",
     "/healthz",
@@ -116,9 +115,6 @@ def seeded(db_file: Path) -> Path:
     return db_file
 
 
-# --- Binding ----------------------------------------------------------------
-
-
 def test_non_loopback_without_allow_remote_refuses_naming_flag():
     runner = CliRunner()
     result = runner.invoke(
@@ -164,17 +160,12 @@ def test_validate_remote_bind_matrix():
     assert validate_remote_bind("0.0.0.0", allow_remote=True, token="a" * 32) is None
 
 
-# --- Token auth -------------------------------------------------------------
-
-
 def test_unauthenticated_401_authenticated_200(seeded):
     client = client_for(seeded, token=TOKEN)
     resp = client.get("/posts")
     assert resp.status_code == 401
     resp = client.get("/posts", headers={"Authorization": f"Bearer {TOKEN}"})
     assert resp.status_code == 200
-    # The first token presentation sets the session cookie, so plain links
-    # keep working afterwards.
     set_cookie = resp.headers["set-cookie"]
     assert SESSION_COOKIE in set_cookie
     assert "httponly" in set_cookie.lower()
@@ -197,7 +188,6 @@ def test_token_prefix_is_rejected(seeded):
     assert resp.status_code == 401
     resp = client.get("/posts?token=" + prefix)
     assert resp.status_code == 401
-    # A truncated token (different length) is rejected just as surely.
     resp = client.get("/posts?token=" + TOKEN[:-1])
     assert resp.status_code == 401
 
@@ -217,9 +207,6 @@ def test_401_shape_follows_path_prefix(seeded):
     page = client.get("/posts")
     assert page.status_code == 401
     assert "text/html" in page.headers["content-type"]
-
-
-# --- Response headers -------------------------------------------------------
 
 
 def test_html_responses_carry_security_headers(seeded):
@@ -244,9 +231,6 @@ def test_no_inline_script_or_style_on_any_page(seeded):
         html = client.get(path).text
         assert not INLINE_SCRIPT.search(html), f"inline <script> on {path}"
         assert not INLINE_STYLE.search(html), f"inline <style> on {path}"
-
-
-# --- Errors -----------------------------------------------------------------
 
 
 def test_html_500_carries_request_id_and_no_details(seeded, capsys, monkeypatch):
@@ -277,18 +261,12 @@ def test_api_500_is_json_with_request_id(seeded, monkeypatch):
     assert "/tmp/leak" not in resp.text
 
 
-# --- Access log -------------------------------------------------------------
-
-
 def test_access_log_redacts_token_query_parameter(seeded, capsys):
     client = client_for(seeded)
     client.get("/posts?token=supersecret")
     err = capsys.readouterr().err
     assert "supersecret" not in err
     assert "token=%5BREDACTED%5D" in err
-
-
-# --- Limits -----------------------------------------------------------------
 
 
 def test_q_over_500_characters_returns_400(seeded):
@@ -302,9 +280,6 @@ def test_query_string_over_4kb_returns_400(seeded):
     assert client.get("/posts?filler=" + "x" * 5000).status_code == 400
 
 
-# --- Read-only enforcement --------------------------------------------------
-
-
 def test_every_route_returns_non_5xx_on_readonly_db(seeded):
     os.chmod(seeded, 0o444)
     try:
@@ -312,8 +287,7 @@ def test_every_route_returns_non_5xx_on_readonly_db(seeded):
         for path in ALL_GET_ROUTES:
             resp = client.get(path)
             assert resp.status_code < 500, f"GET {path} -> {resp.status_code}"
-        # State-changing routes are POST-only and refuse without the CSRF
-        # token; they must fail loudly but never with a 5xx.
+        # POST without a CSRF token must fail loudly, but never with a 5xx.
         for path in ("/crawl", "/crawl/stop"):
             resp = client.post(path, data={})
             assert resp.status_code < 500, f"POST {path} -> {resp.status_code}"

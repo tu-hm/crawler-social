@@ -18,12 +18,12 @@ your own phone-numbered account. No review queue, no approval ticket, no busines
 > statement is **"no review queue, but the self-service form fails opaquely for some
 > accounts."**
 >
-> So **confirm you can actually obtain one on day one** — that is **T0** in
-> [../../PLAN.md](../../PLAN.md) §6 M0, alongside Reddit's R0, and it is item 0 in §18
+> So **confirm you can actually obtain one on day one** — that is **T0**, alongside
+> Reddit's R0, and it is item 0 in §18
 > below. Reddit's credential risk gets a free day-one spike precisely because it might not
 > resolve; the premise on this side deserved the same treatment. **If T0 fails, Telegram is
 > not connector #2** and the slot goes to whichever of Reddit (if R0 came back approved) or
-> the X archive importer is available. That call is pre-made in PLAN §6 M0.
+> the X archive importer is available. That call is pre-made rather than discovered late.
 Telegram publishes the protocol, the schema, the error table and the offset semantics. Logging
 in as your own user account is the *intended* use of MTProto — third-party clients are the
 reason the API exists.
@@ -96,7 +96,7 @@ wants an API surface that does not move under it while still tracking the wire p
 
 **Containment.** Every Telethon symbol lives inside `connectors/telegram/`. No Telethon type
 crosses the `Envelope` boundary. This is the same isolation argument the Facebook connector makes for selenium — every
-third-party client lives inside its own connector directory (PLAN.md §5.5) — and it is what
+third-party client lives inside its own connector directory — and it is what
 makes a Kurigram swap a one-directory change rather than a rewrite. Vendor the wheel; a "may be deleted in the future" mirror is not a supply chain the
 08:05 job should depend on.
 
@@ -240,7 +240,7 @@ Deliberately **not** set:
 | Flag | Why not |
 |---|---|
 | `Cap.DELETE_EVENTS` | `MessageDeleted` is documented as unreliable and `UpdatesTooLong` / `ChannelDifferenceTooLong` explicitly mean "I will not enumerate what you missed." Setting this flag would gate off the absence sweep, and DM deletions would then **never** be detected. This is a deliberate correction to an earlier draft that set the flag and contradicted its own body text. |
-| *(`Cap.PUSH`)* | **not applicable — the flag does not exist in the enum.** v1 is poll-only (§7), and Telegram listen mode is the only candidate that would ever have set it. See ARCHITECTURE §6 |
+| *(`Cap.PUSH`)* | **not applicable — the flag does not exist in the enum.** v1 is poll-only (§7), and Telegram listen mode is the only candidate that would ever have set it |
 | `Cap.NEEDS_GUI` | no browser anywhere in this connector |
 | `Cap.PARALLEL_TARGETS` | one session, one flock, strictly serial targets |
 | `Cap.BACKFILL_CAPPED` | there is no ceiling; backfill is bounded by policy, not by the platform |
@@ -299,7 +299,7 @@ What a listener actually costs:
 
 What it buys: minutes of latency on a **nightly personal archive**. That is not a trade.
 
-**Deferred, with a trigger** ([../../PLAN.md](../../PLAN.md) §11). Listen mode is a strict
+**Deferred, with a trigger.** Listen mode is a strict
 superset of the pull path — same envelopes, same store, same reconciler — so switching later
 costs no migration. The *design* for how a listener would avoid opening SQLite is written
 down in [../DECISIONS.md](../DECISIONS.md) ADR-0036 and is explicitly **not built**: there is
@@ -612,8 +612,8 @@ not a policy note — it is the reason no connector can accidentally persist one
 
 ## 13. Envelope, parse and the honest raw-first caveat
 
-The `Envelope` / `Cursor` / `Coverage` contract itself is specified in
-[../../ARCHITECTURE.md](../../ARCHITECTURE.md); this section is only what Telegram puts in it.
+The `Envelope` / `Cursor` / `Coverage` contract itself is specified by core; this section is
+only what Telegram puts in it.
 
 ### 13.1 Kinds
 
@@ -837,7 +837,7 @@ crawler targets add tg:-1001234567890 --ack-third-party --retention-days forever
                                       --backfill 90d
 ```
 
-Spellings and flags are normative in [../../ARCHITECTURE.md](../../ARCHITECTURE.md) §11.
+Spellings and flags are defined by the CLI itself.
 `--ack-third-party` **and** `--retention-days` are both required for a conversation target;
 `forever` is a legal answer and enrolment is refused without an explicit one
 ([../GOVERNANCE.md](../GOVERNANCE.md) §6.1).
@@ -927,13 +927,12 @@ detection — with no network and no session file.
 
 ## 18. Verify before building
 
-**The consolidated list is [../../PLAN.md](../../PLAN.md) §12**; this is the Telegram subset
-with its per-item consequence. **Item 0 blocks the connector outright; nothing else below
-blocks the design.**
+This is the Telegram subset of the unverified claims, with its per-item consequence.
+**Item 0 blocks the connector outright; nothing else below blocks the design.**
 
 | # | Claim | Status | How to settle it |
 |---|---|---|---|
-| **0** | **You can actually obtain an `api_id`/`api_hash` at `my.telegram.org`** | **unverified** — the *Create application* form is reported to fail opaquely for some accounts with a bare `ERROR` (§1) | **T0, day one.** Log in → API development tools → create an application; store the pair in Keychain. **Consequence if it fails: the entire connector is blocked** and Telegram is not connector #2 — the slot changes hands per PLAN §6 M0. This is the one item here that is not merely a number |
+| **0** | **You can actually obtain an `api_id`/`api_hash` at `my.telegram.org`** | **unverified** — the *Create application* form is reported to fail opaquely for some accounts with a bare `ERROR` (§1) | **T0, day one.** Log in → API development tools → create an application; store the pair in Keychain. **Consequence if it fails: the entire connector is blocked** and Telegram is not connector #2 — the slot changes hands. This is the one item here that is not merely a number |
 | 1 | Telegram API ToS wording — the "retractable, limited…" licence and the `recover@telegram.org` recourse | **unverified** — search extracts only; core.telegram.org was not fetched | Read core.telegram.org/api/terms and /api/obtaining_api_id in a browser |
 | 2 | The ML-training prohibition and its narrow consent exception | **likely** — corroborated across telegram.org/tos/bot-developers and /api/terms via search; body pages not fetched | Same. This one is load-bearing if any LLM use is contemplated |
 | 3 | Whether a **public channel's history reads without joining** | **unverified** — sources ambiguous | Resolve one throwaway public channel and `iter_messages(limit=5)` without joining. Decides whether the tool must ever perform a join (a medium-risk action) |

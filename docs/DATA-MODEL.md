@@ -9,8 +9,7 @@ down. Query plans are real `EXPLAIN QUERY PLAN` output, not predictions. Two def
 the frozen DDL were found that way and are documented in
 [§13 Defects found while validating the frozen DDL](#13-defects-found-while-validating-the-frozen-ddl).
 
-Siblings: [../ARCHITECTURE.md](../ARCHITECTURE.md) — the connector contract and core
-seam · [./GOVERNANCE.md](./GOVERNANCE.md) — privacy classes, retention, export policy ·
+Siblings: [./GOVERNANCE.md](./GOVERNANCE.md) — privacy classes, retention, export policy ·
 [./DECISIONS.md](./DECISIONS.md) — why each of these was chosen, and the delivery order ·
 per-source detail in [./sources/facebook.md](./sources/facebook.md),
 [./sources/telegram.md](./sources/telegram.md), [./sources/reddit.md](./sources/reddit.md),
@@ -317,8 +316,8 @@ is out of the schema at v1. An earlier draft carried both, empty, with
 have required a migration, and a migration is a review checkpoint. The tripwire is worth
 keeping; two tables, a composite foreign key and a `CHECK` with **zero declared writers**
 are not the cheapest way to buy it. The rule now lives in
-[./DECISIONS.md](./DECISIONS.md) ADR-0023 as a written standing decision, and the deferred
-row in [../PLAN.md](../PLAN.md) §11 carries the trigger. The underlying reason is unchanged
+[./DECISIONS.md](./DECISIONS.md) ADR-0023 as a written standing decision, which also
+carries the trigger. The underlying reason is unchanged
 and is a correctness reason rather than a cautious one: Vietnamese given-name distributions
 are concentrated enough that name-based cross-platform matching is near a coin flip, and a
 wrong link silently poisons every query that reads it with no way to tell which rows are
@@ -485,7 +484,7 @@ CREATE INDEX idx_gaps_open ON gaps(target_id) WHERE filled_at IS NULL;
 -- the early warning that Facebook rotated the DOM — and it works identically for a Reddit
 -- JSON field disappearing. Core writes these rows from `ParseResult.field_stats`
 -- (dict[str, tuple[int,int]] -> field -> (seen, filled)), NOT from `diagnostics`, which is
--- free text and cannot carry a triple. See ARCHITECTURE.md §5.
+-- free text and cannot carry a triple.
 --
 -- `filled` is only well defined if a parser can distinguish "absent" from "false". That is
 -- why is_pinned / is_sponsored / more_remaining are TRI-STATE in ItemDraft: a `bool = False`
@@ -573,8 +572,8 @@ CREATE INDEX idx_env_purge   ON envelopes(purge_after) WHERE purge_after IS NOT 
   -- serves: the retention sweep. Partial, so it only touches rows that HAVE a TTL.
 
 -- ONE ROW PER FETCH EVENT.
--- This split is the single most important correction to the original plan's `raw_payloads`
--- (see PLAN.md §5.5), whose `sha256 UNIQUE`
+-- This split is the single most important correction to the original plan's
+-- `raw_payloads`, whose `sha256 UNIQUE`
 -- on a table also carrying captured_at collapses Monday, Tuesday and Wednesday fetches of
 -- an unchanged page into ONE row with Monday's timestamp — destroying the exact input to
 -- soft-delete detection: "when did I last confirm this still existed".
@@ -739,7 +738,7 @@ CREATE INDEX idx_item_versions_time ON item_versions(item_id, observed_at);
 CREATE TABLE item_relations (
   from_item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
   -- No 'pinned_in': pinning is items.is_pinned, no source mapping ever emitted it, and the
-  -- CHECK must match RelationDraft.rel in ARCHITECTURE.md §5 exactly.
+  -- CHECK must match RelationDraft.rel exactly.
   rel TEXT NOT NULL CHECK (rel IN
     ('quote_of','repost_of','forward_of','crosspost_of','album_member')),
   to_ref       TEXT NOT NULL,           -- ALWAYS written, even when unresolvable
@@ -1430,7 +1429,7 @@ and the design refutes it three ways:
 
 So the growth term that actually matters is `envelope_fetches`, plus Facebook's HTML
 snapshots at ~50 KB compressed per scroll step. The compaction pass has been **dropped, not
-deferred** (see [../PLAN.md](../PLAN.md) §11): the retention sweep and `envelopes.purge_after`
+deferred**: the retention sweep and `envelopes.purge_after`
 already bound the store, and a trigger sized against a hundredfold-inflated number is worse
 than no trigger.
 
@@ -1591,7 +1590,7 @@ The named future extension is **projection A/B diffing**: `--rebuild items --int
 rebuilds from stored envelopes into a shadow table, then diffs row counts and per-field fill
 rates before you promote. It converts the fill-rate canary from an alarm that fires three
 weeks late into a pre-flight check on your own fix. It is deferred, with its trigger — the
-second Facebook parser rewrite after a DOM rotation — in [../PLAN.md](../PLAN.md) §11.
+second Facebook parser rewrite after a DOM rotation.
 
 ---
 
@@ -2431,8 +2430,8 @@ design; all three change the statements you type.
 > **The standing rule that comes out of all three, stated once.** Every one of these was a
 > case where **the DDL was executed and the surrounding prose was not.** So: §3 is the only
 > copy of the schema. A DDL fragment quoted in any other document — including
-> [./GOVERNANCE.md](./GOVERNANCE.md) §3 and §16, [../ARCHITECTURE.md](../ARCHITECTURE.md)
-> §4, and the source docs — must be a **verbatim copy of the executed text with a link back
+> [./GOVERNANCE.md](./GOVERNANCE.md) §3 and §16, and the source docs — must be a
+> **verbatim copy of the executed text with a link back
 > here**, never a paraphrase and never a remembered version. A paraphrased constraint is a
 > constraint nobody ran.
 
@@ -2540,10 +2539,8 @@ the boundedness is a schema property and a second role is a migration. The objec
 
 ## 14. Verify before building
 
-**This is the schema-facing subset.** The consolidated, project-wide checklist — every
-unverified claim in every document, with how to check it and roughly how long that takes —
-is [../PLAN.md](../PLAN.md) §12. Where the two overlap, PLAN §12 is the list to work from;
-this section carries the schema-specific consequence of each answer.
+**This is the schema-facing subset**, carrying the schema-specific consequence of each
+answer.
 
 Nothing here blocks the schema — it is frozen and it executes. These are the claims the
 schema *touches* that were not confirmed at first-party level, carried forward from recon
@@ -2624,7 +2621,7 @@ Eleven statements. If one of them stops being true, something is wrong.
 
 ## 16. The v2 web server read path
 
-*Added 2026-09-05 with `plans/v2/`. The four v1 tables are unchanged; this section
+*Added 2026-09-05 with the v2 web server. The four v1 tables are unchanged; this section
 records what the local web viewer reads and the only schema the v2 work added.*
 
 The server (`crawler_social/server/`) is a **reader** over the same `social.db` the

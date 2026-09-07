@@ -1,8 +1,8 @@
-"""Required tests from plans/v2/05-posts-viewer.md.
+"""Tests for the posts viewer.
 
-The posts table link test (every /posts/{id} URL returns 200) is written
-here per the plan but only goes green once the Step 06 detail route
-exists; everything else stands on its own.
+The posts table link test (every /posts/{id} URL returns 200) only goes
+green once the post detail route exists; everything else stands on its
+own.
 """
 
 from __future__ import annotations
@@ -63,7 +63,6 @@ def test_posts_lists_seeded_posts_newest_first(client: TestClient):
     middle = resp.text.index("2026-01-28T10:00:00+00:00")
     oldest = resp.text.index("2026-01-01T10:00:00+00:00")
     assert newest < middle < oldest
-    # The relative age rides along in the title attribute.
     assert re.search(r'title="[^"]*\d[smhdw] ago"', resp.text)
 
 
@@ -83,9 +82,9 @@ def test_q_term_is_wrapped_in_mark(client: TestClient):
 def test_q_injection_is_escaped_and_mark_stays_escaped(client: TestClient):
     resp = client.get("/posts", params={"q": "<img src=x onerror=1>"})
     assert resp.status_code == 200
-    assert "&lt;img src=x onerror=1&gt;" in resp.text  # echoed escaped
+    assert "&lt;img src=x onerror=1&gt;" in resp.text
     assert "<img src=x" not in resp.text
-    assert "<mark>" not in resp.text  # no match, so no wrapping at all
+    assert "<mark>" not in resp.text
 
     # An escaped separator inside a match must stay escaped around <mark>.
     resp = client.get("/posts", params={"q": "fish"})
@@ -166,8 +165,6 @@ def test_csv_link_query_equals_page_query(client: TestClient):
 
 
 def test_every_post_links_to_a_200_detail_page(client: TestClient):
-    # Detail pages arrive with Step 06; until then this asserts the links
-    # exist for every row and the route round-trips the id.
     resp = client.get("/posts", params={"limit": 200})
     hrefs = set(_post_hrefs(resp.text))
     assert len(hrefs) == N_POSTS  # excerpt link + view link dedupe to one each
@@ -216,9 +213,6 @@ def test_invalid_html_params_fall_back_instead_of_422(client: TestClient):
     resp = client.get("/posts", params={"limit": "banana"})
     assert resp.status_code == 200
     assert "30 posts" in resp.text
-
-
-# -- v3: the comments panel on a post's detail page -------------------------
 
 
 def test_post_detail_shows_stored_comments_in_rank_order(db_file: Path):

@@ -24,9 +24,7 @@
 <section class="panel">
   <div class="page-head">
     <h2>Text</h2>
-    {# Two spans rather than one label rewritten by JavaScript: the
-       server-rendered state has to be correct with JavaScript off, and
-       x-cloak is what keeps "Copied" hidden in that case. #}
+    {# Two spans, not one label rewritten by JS: x-cloak keeps "Copied" hidden when JavaScript is off. #}
     {% if post.text %}
     <button class="button" type="button"
             x-data="copyButton" x-on:click="copy"

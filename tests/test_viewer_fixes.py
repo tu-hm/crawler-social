@@ -41,9 +41,6 @@ def client(db_file: Path) -> TestClient:
     )
 
 
-# -- shared page chrome -----------------------------------------------------
-
-
 def _footer_counts(body: str) -> str:
     match = re.search(r"<footer.*?</footer>", body, re.S)
     assert match, "no footer in the response"
@@ -52,9 +49,6 @@ def _footer_counts(body: str) -> str:
 
 @pytest.mark.parametrize("path", ["/nope", "/posts/does-not-exist", "/runs/999"])
 def test_not_found_pages_render_complete_chrome(client: TestClient, path: str):
-    # 404 and error pages used to be rendered from a bare context, so
-    # base.html printed "crawler-social v" with no version, an empty
-    # database path, and "  posts ·   snapshots ·   runs".
     resp = client.get(path)
     assert resp.status_code == 404
     counts = _footer_counts(resp.text)
@@ -73,8 +67,6 @@ def test_error_page_renders_complete_chrome(client: TestClient):
 
 
 def test_crawl_page_footer_counts_come_from_the_database(client: TestClient):
-    # _crawl_context built its chrome without a connection, so /crawl
-    # always claimed "0 posts · 0 snapshots · 0 runs".
     counts = _footer_counts(client.get("/crawl").text)
     assert "1 post ·" in counts and "1 run" in counts
     assert "0 post" not in counts
@@ -85,13 +77,9 @@ def test_footer_counts_are_singular_for_one(client: TestClient):
     assert "1 runs" not in client.get("/").text
 
 
-# -- accessibility / markup -------------------------------------------------
-
-
 def test_active_nav_link_is_marked_current(client: TestClient):
     body = client.get("/posts").text
     assert re.search(r'href="/posts"[^>]*aria-current="page"', body)
-    # ...and only the active one.
     assert body.count('aria-current="page"') == 1
 
 
@@ -105,8 +93,6 @@ def test_every_page_offers_a_skip_link_to_the_content(client: TestClient):
     "path", ["/posts/p1", "/runs/1", "/snapshots/1"]
 )
 def test_description_lists_are_dl_elements(client: TestClient, path: str):
-    # dt/dd are only valid inside a dl. These three pages wrapped them in
-    # a div, which drops the list semantics a screen reader relies on.
     body = client.get(path).text
     assert '<dl class="detail-grid">' in body
     assert '<div class="detail-grid">' not in body
@@ -115,8 +101,7 @@ def test_description_lists_are_dl_elements(client: TestClient, path: str):
 
 
 def test_home_post_links_survive_a_slash_in_the_post_id(db_file: Path):
-    # index.html used Jinja's | urlencode, which leaves "/" alone, so a
-    # post id containing one linked to the wrong path.
+    # Jinja's |urlencode leaves "/" alone, so the id must be path-escaped.
     client = build(
         db_file,
         posts=[("123/456", PAGE, "sliced id", "Ann", None,
@@ -128,13 +113,8 @@ def test_home_post_links_survive_a_slash_in_the_post_id(db_file: Path):
     assert client.get("/posts/123%2F456").status_code == 200
 
 
-# -- paging -----------------------------------------------------------------
-
-
 @pytest.mark.parametrize("path", ["/posts", "/snapshots", "/runs"])
 def test_paging_past_the_end_returns_to_the_last_page(db_file: Path, path: str):
-    # An offset past the end rendered an empty table under "No posts
-    # stored yet." -- false, and a dead end with no pagination controls.
     client = build(
         db_file,
         posts=[(f"p{i}", PAGE, f"text {i}", "Ann", None,
@@ -158,13 +138,8 @@ def test_paging_inside_the_result_set_is_not_redirected(client: TestClient):
     assert client.get("/posts?offset=0", follow_redirects=False).status_code == 200
 
 
-# -- search -----------------------------------------------------------------
-
-
 def test_search_hit_beyond_the_excerpt_is_still_highlighted(db_file: Path):
-    # The excerpt was taken from the head of the text before highlighting,
-    # so a match past 180 characters produced a row with no visible
-    # reason it matched.
+    # The filler pushes NEEDLE past the 180-char excerpt window.
     text = "filler words here " * 30 + "NEEDLE " + "trailing words " * 30
     client = build(
         db_file,
@@ -194,20 +169,13 @@ def test_search_text_is_still_escaped_when_it_is_the_match(db_file: Path):
     assert "&lt;" in body
 
 
-# -- units ------------------------------------------------------------------
-
-
 def test_format_bytes_climbs_past_gigabytes():
-    # The ladder stopped at GB and had an unreachable trailing return.
     assert format_bytes(0) == "0 B"
     assert format_bytes(1023) == "1023 B"
     assert format_bytes(1024) == "1.0 KB"
     assert format_bytes(1024 ** 3) == "1.0 GB"
     assert format_bytes(1024 ** 4) == "1.0 TB"
     assert format_bytes(5 * 1024 ** 4) == "5.0 TB"
-
-
-# -- CSV export -------------------------------------------------------------
 
 
 def test_csv_cells_that_look_like_formulas_are_neutralised():
@@ -232,8 +200,8 @@ def test_csv_export_neutralises_a_formula_in_post_text(db_file: Path):
 
 
 def test_csv_export_streams_every_page_of_a_large_result_set(db_file: Path):
-    # More rows than MAX_PAGE_SIZE, so the paging loop in rows() runs more
-    # than once and the connection must outlive the handler.
+    # Over MAX_PAGE_SIZE, so rows() pages and the connection must outlive
+    # the handler.
     total = 450
     client = build(
         db_file,
@@ -242,12 +210,9 @@ def test_csv_export_streams_every_page_of_a_large_result_set(db_file: Path):
     )
     body = client.get("/api/export/posts.csv").text
     rows = [line for line in body.splitlines() if line.strip()]
-    assert len(rows) == total + 1  # + the header
+    assert len(rows) == total + 1
     ids = {line.split(",", 1)[0] for line in rows[1:]}
     assert len(ids) == total, "the CSV repeated or skipped rows"
-
-
-# -- limits -----------------------------------------------------------------
 
 
 def test_oversized_request_body_is_refused(client: TestClient):
@@ -272,12 +237,9 @@ def test_bad_content_length_is_a_400(client: TestClient):
     assert resp.status_code == 400
 
 
-# -- older databases --------------------------------------------------------
-
-
 def test_pages_render_against_a_database_written_before_v3(tmp_path: Path):
-    # posts.post_url and the comments table arrived in v3; the viewer opens
-    # the file read-only and cannot migrate it, so it must read without them.
+    # The viewer opens the file read-only and cannot migrate it, so it must
+    # read a v2 schema as-is.
     import sqlite3
 
     from crawler_social.server.app import create_app
@@ -320,9 +282,6 @@ def test_pages_render_against_a_database_written_before_v3(tmp_path: Path):
     assert client.get("/api/summary").json()["total_comments"] == 0
 
 
-# -- degrading instead of failing -------------------------------------------
-
-
 @pytest.mark.parametrize(
     "path,expected",
     [
@@ -336,9 +295,6 @@ def test_pages_render_against_a_database_written_before_v3(tmp_path: Path):
 def test_list_pages_show_an_empty_state_before_the_first_crawl(
     tmp_path: Path, path: str, expected: str
 ):
-    # /runs, /snapshots and /state used to answer 404 "There is no page at
-    # this address." when the database file did not exist yet, which makes
-    # a working nav link look broken.
     from crawler_social.server.app import create_app
 
     client = TestClient(create_app(make_config(tmp_path / "absent.db")))
@@ -352,14 +308,11 @@ def test_a_genuinely_missing_address_is_still_a_404(tmp_path: Path):
 
     client = TestClient(create_app(make_config(tmp_path / "absent.db")))
     assert client.get("/nope").status_code == 404
-    # ...and so is a specific row that does not exist.
     assert client.get("/runs/1").status_code == 404
     assert client.get("/snapshots/1").status_code == 404
 
 
 def test_snapshot_page_survives_an_unreadable_capture_time(db_file: Path):
-    # A stored value datetime.fromisoformat cannot read used to take the
-    # page down with a 500. The snapshot page renders it as stored.
     import sqlite3
 
     client = build(
@@ -379,9 +332,6 @@ def test_snapshot_page_survives_an_unreadable_capture_time(db_file: Path):
     assert "not-a-date" in resp.text
 
 
-# -- HTTP method handling ---------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "path",
     [
@@ -393,15 +343,12 @@ def test_snapshot_page_survives_an_unreadable_capture_time(db_file: Path):
     ],
 )
 def test_head_answers_wherever_get_does(client: TestClient, path: str):
-    # FastAPI's APIRoute does not add HEAD to a GET route the way
-    # Starlette's plain Route does, so every path answered 405 -- most
-    # awkwardly /healthz, which exists for supervisor probes.
+    # FastAPI's APIRoute, unlike Starlette's Route, does not add HEAD to GET.
     assert client.get(path).status_code == 200, f"GET {path} is not 200"
     assert client.head(path).status_code == 200, f"HEAD {path} -> 405"
 
 
 def test_post_only_routes_still_refuse_head(client: TestClient):
-    # /crawl/stop is POST-only, so HEAD must stay a 405. (/crawl itself
-    # has a GET route as well, so HEAD there is a 200 on purpose.)
+    # /crawl also has a GET route, so HEAD there is a 200 on purpose.
     assert client.head("/crawl/stop").status_code == 405
     assert client.head("/crawl").status_code == 200

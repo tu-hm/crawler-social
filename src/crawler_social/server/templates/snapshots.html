@@ -6,10 +6,6 @@
 </div>
 <p class="muted">Metadata only — captured HTML is never loaded into a list view.</p>
 
-{# Same pattern as /posts: re-request this route, swap #results out of the
-   full response. The Run ID field is type=text and takes `change` on blur,
-   not a keystroke debounce -- app.js only ever debounced input[type=search],
-   so this field was never auto-submitted before either. #}
 <form class="filter-bar" method="get" action="/snapshots"
       hx-get="/snapshots"
       hx-trigger="submit,

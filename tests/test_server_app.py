@@ -1,4 +1,4 @@
-"""Required tests from plans/v2/02-server-skeleton.md."""
+"""Tests for the server skeleton."""
 
 from __future__ import annotations
 
@@ -72,8 +72,7 @@ def test_healthz_without_database(tmp_path: Path):
 
 def test_data_endpoint_503_when_database_missing(tmp_path: Path):
     client = TestClient(create_app(make_config(tmp_path / "missing.db")))
-    # A data route that exists by Step 03; healthz is the only always-on
-    # route, so exercise the dependency directly through a probe route.
+    # healthz is the only always-on route, so probe the dependency directly.
     app = create_app(make_config(tmp_path / "missing.db"))
 
     from fastapi import Depends
@@ -139,8 +138,6 @@ def test_internal_error_returns_opaque_500(db_path: Path):
     client = TestClient(app, raise_server_exceptions=False)
     resp = client.get("/_boom")
     assert resp.status_code == 500
-    # plans/v2/09: the page carries only a request id -- no path, no SQL,
-    # no traceback. The id goes to stderr with the full traceback instead.
     assert "/tmp/leak" not in resp.text
     assert "SELECT" not in resp.text
     assert "RuntimeError" not in resp.text

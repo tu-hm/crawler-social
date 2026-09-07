@@ -1,4 +1,4 @@
-"""Required tests from plans/v2/01-read-query-layer.md."""
+"""Tests for the read query layer."""
 
 from __future__ import annotations
 
@@ -128,8 +128,7 @@ def test_list_posts_since_until(ro):
 
 
 def test_limit_and_offset_are_clamped(ro):
-    # Only 4 rows exist, so a clamped limit of 200 cannot be observed by row
-    # count alone; clamp behavior is checked through the module constant.
+    # Only 4 rows exist; the real clamp is checked in the next test.
     rows, _ = queries.list_posts(ro, limit=10_000)
     assert len(rows) == 4
     rows, _ = queries.list_posts(ro, limit=10, offset=-5)
@@ -255,9 +254,6 @@ def test_extended_schema_applies_twice_safely(tmp_path: Path):
             "idx_snapshots_page"} <= names
 
 
-# -- v3: comments, and reading a database an older crawler wrote -------------
-
-
 def seed_comments(path: Path) -> None:
     conn = db.connect(path)
     try:
@@ -336,8 +332,7 @@ def test_the_viewer_reads_a_database_written_before_v3(tmp_path: Path):
         assert total == 1
         assert "post_url" not in rows[0]
         assert queries.get_post(conn, "p1") is not None
-        # The comments table does not exist; asking for comments is empty,
-        # not an error.
+        # No comments table: asking for comments is empty, not an error.
         assert queries.list_comments(conn, post_id="p1", limit=10) == ([], 0)
         assert queries.comment_counts(conn, ["p1"]) == {}
         assert queries.summary(conn)["total_comments"] == 0

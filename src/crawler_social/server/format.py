@@ -54,7 +54,6 @@ def snippet(text: str | None, term: str | None, length: int = 180) -> str:
     found = collapsed.lower().find(term.lower())
     if found == -1:
         return excerpt(collapsed, length)
-    # Keep a third of the window as lead-in so the match is not flush left.
     lead = max(length // 3, 0)
     start = max(0, min(found - lead, len(collapsed) - length))
     end = start + length

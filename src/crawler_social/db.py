@@ -35,18 +35,14 @@ def connect(path: Path) -> sqlite3.Connection:
     dropped = _drop_snapshot_html(conn)
     conn.commit()
     if dropped:
-        # The blob column is gone but its pages are still in the file;
-        # VACUUM is what hands them back, and it cannot run in a
-        # transaction. This happens once, on the first connect after the
-        # upgrade.
+        # VACUUM reclaims the dropped column's pages; it cannot run in a
+        # transaction, so it runs after the commit above.
         conn.execute("VACUUM")
     return conn
 
 
-#: Columns added after the first databases were written. `CREATE TABLE IF
-#: NOT EXISTS` does nothing for a table that already exists, so a column
-#: added to schema.py later needs a real ALTER. Additive only: nothing here
-#: rewrites or drops, so it is safe to run on every connect.
+#: CREATE TABLE IF NOT EXISTS does nothing to an existing table, so a column
+#: added later needs an ALTER. Additive only, so it is safe on every connect.
 _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("posts", "post_url", "ALTER TABLE posts ADD COLUMN post_url TEXT"),
     (
@@ -74,8 +70,7 @@ def _drop_snapshot_html(conn: sqlite3.Connection) -> bool:
     if "html" not in columns:
         return False
     size = "COALESCE(size_bytes, length(html))" if "size_bytes" in columns else "length(html)"
-    # The rebuild drops a table another table's foreign keys point at, so
-    # enforcement goes off for the duration and the result is checked.
+    # Off for the rebuild: it drops a table another table's keys point at.
     conn.execute("PRAGMA foreign_keys=OFF")
     try:
         with transaction(conn):
@@ -118,9 +113,7 @@ def _migrate_columns(conn: sqlite3.Connection) -> list[str]:
         conn.execute(statement)
         applied.append(f"{table}.{column}")
     if "snapshots.size_bytes" in applied and "html" in _snapshot_columns(conn):
-        # A database written before this column carries each capture's size
-        # only in the blob about to be dropped; copy it across first so the
-        # viewer keeps reporting what was fetched.
+        # The size lives only in the blob about to be dropped; copy it first.
         conn.execute(
             "UPDATE snapshots SET size_bytes = length(html)"
             " WHERE size_bytes IS NULL"

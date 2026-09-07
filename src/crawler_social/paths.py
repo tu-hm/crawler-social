@@ -35,7 +35,6 @@ def default_db_path(env: dict[str, str] | None = None) -> Path:
     root = env.get("CRAWLER_PROJECT_ROOT")
     if root:
         return Path(root) / "data" / "social.db"
-    # Locate the project root by walking up from this file's tree, then CWD.
     for start in (Path.cwd(), Path(__file__).resolve().parent):
         current = start
         while current != current.parent:

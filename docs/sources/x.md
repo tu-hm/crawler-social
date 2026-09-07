@@ -85,7 +85,7 @@ Consequences, all of which fall out of the frozen design with **zero X-specific 
 - `containers.viewer_account_id NOT NULL` **is** a real `CHECK` and it executes. "By what right do I hold this?" as a constraint.
 - `targets.ack_third_party = 1` is required before a conversation target can be enrolled — enforced by **two `BEFORE` triggers**, not a `CHECK`; SQLite rejects subqueries in `CHECK` constraints (see [../DATA-MODEL.md](../DATA-MODEL.md) §13.1).
 - `enrolled_at` is the forward-only floor. For an archive import the user is deliberately choosing to backfill, so `backfill_from` is set explicitly — **per conversation, never in bulk.** There is no `--all-dms`.
-- `crawler targets add` **refuses** to enrol a conversation target if `fdesetup status` reports FileVault off, and refuses again without an explicit `--retention-days`. Command spellings are normative in [../../ARCHITECTURE.md](../../ARCHITECTURE.md) §11.
+- `crawler targets add` **refuses** to enrol a conversation target if `fdesetup status` reports FileVault off, and refuses again without an explicit `--retention-days`. Command spellings are defined by the CLI itself.
 - Conversation envelopes are **not exportable at all**. No flag exists.
 
 The one X-specific decision: **a single ZIP produces both privacy halves in one import run.** That is the same property that made Telegram the architecture's decisive test case (one connector, one session, broadcast channels *and* private DMs), arriving a second time. If the two-file router works for Telegram in Phase 2, X's archive importer needs no new machinery in Phase 4 — which is a good reason to build them in that order.
@@ -96,8 +96,8 @@ The one X-specific decision: **a single ZIP produces both privacy halves in one 
 
 **Do not write the parser from memory. Open one ZIP first.** Concretely, before Phase 4a:
 
-1. **Request the archive on day one, not when you reach Phase 4a.** This is **X0** in
-   [../../PLAN.md](../../PLAN.md) §6 M0, and it belongs there for the same reason R0 does:
+1. **Request the archive on day one, not when you reach Phase 4a.** This is **X0**, and it
+   belongs on day one for the same reason R0 does:
    it is free, it carries zero ToS risk, and the answer takes ~24h (up to 48h for a large
    account) to arrive. **The download link expires 7 days after generation** — download it
    immediately and keep it outside the worktree. Request it at M15 instead and you will
@@ -458,7 +458,7 @@ Caching the numeric user id in `containers.extra` is not an optimisation, it is 
 
 ## 8. Verify before building
 
-**The consolidated list is [../../PLAN.md](../../PLAN.md) §12**; this is the X subset with its per-item consequence.
+This is the X subset of the unverified claims, with its per-item consequence.
 
 | # | Claim | Confidence | How to settle it | Blocks |
 |---|---|---|---|---|
@@ -490,4 +490,4 @@ Caching the numeric user id in `containers.extra` is not an optimisation, it is 
 
 ---
 
-*See also: [./reddit.md](./reddit.md) — the other REST connector, and the instructive contrast: Reddit's governor is a **quota** corrected by response headers; X's is a **spend counter** checked before the run starts. Same `TokenBucket`, same `Budget`, different fields filled. · [../DATA-MODEL.md](../DATA-MODEL.md) · [../../ARCHITECTURE.md](../../ARCHITECTURE.md) · [../GOVERNANCE.md](../GOVERNANCE.md) for the conversation-class handling the archive importer inherits.*
+*See also: [./reddit.md](./reddit.md) — the other REST connector, and the instructive contrast: Reddit's governor is a **quota** corrected by response headers; X's is a **spend counter** checked before the run starts. Same `TokenBucket`, same `Budget`, different fields filled. · [../DATA-MODEL.md](../DATA-MODEL.md) · [../GOVERNANCE.md](../GOVERNANCE.md) for the conversation-class handling the archive importer inherits.*

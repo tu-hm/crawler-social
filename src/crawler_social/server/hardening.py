@@ -1,4 +1,4 @@
-"""Server hardening (plans/v2/09).
+"""Server hardening.
 
 With no `CRAWLER_SERVE_TOKEN` configured and a loopback bind, this module
 adds only response headers, an access log, and request-size limits. A
@@ -20,8 +20,6 @@ from urllib.parse import parse_qsl, urlencode
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
-#: CSP for app pages. The snapshot raw route sets its own stricter CSP and
-#: the headers middleware uses setdefault, so that one is never overwritten.
 APP_CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self'; "
     "img-src 'self' data:; frame-src 'self'; connect-src 'self'; "
@@ -34,8 +32,7 @@ TOKEN_PARAM = "token"
 MIN_TOKEN_CHARS = 32
 MAX_QUERY_BYTES = 4096
 MAX_Q_CHARS = 500
-#: The only bodies this server reads are the two small /crawl forms, so a
-#: body larger than this is refused before anything reads it.
+#: Only the two small /crawl forms are ever posted; anything larger is refused.
 MAX_BODY_BYTES = 64 * 1024
 
 _ERROR_TITLES = {
@@ -129,9 +126,7 @@ class LimitsMiddleware(BaseHTTPMiddleware):
                 "q_too_long",
                 f"q exceeds {MAX_Q_CHARS} characters.",
             )
-        # A declared length is refused up front so the body is never read.
-        # An undeclared (chunked) body still can't grow past the cap
-        # because nothing downstream reads more than the form.
+        # A chunked body declares no length; nothing downstream reads past the form.
         declared = request.headers.get("content-length")
         if declared is not None:
             try:

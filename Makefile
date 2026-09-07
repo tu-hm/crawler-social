@@ -35,8 +35,8 @@ posts:
 serve:
 	uv run crawler serve
 
-# The verification gate (plans/v2/10): every registered route smoke-tested,
-# so a new route cannot ship without one.
+# Every registered route is smoke-tested, so a new route cannot ship
+# without one.
 test-server:
 	uv run pytest tests/test_smoke_routes.py
 
@@ -44,8 +44,8 @@ test-server:
 serve-check: test
 	uv run crawler serve
 
-# Vendored front-end libraries (plans/v4). Committed to the repo, so a
-# clone plus `uv sync` works offline with no Node installed. These targets
+# Vendored front-end libraries. Committed to the repo, so a clone plus
+# `uv sync` works offline with no Node installed. These targets
 # exist to re-fetch and diff, never as a build step.
 HTMX_VERSION ?= 2.0.6
 ALPINE_CSP_VERSION ?= 3.14.9

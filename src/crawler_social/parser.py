@@ -26,9 +26,7 @@ class Post:
     text: Optional[str]
     author: Optional[str]
     published_at: Optional[str]
-    #: The post's own permalink when the article carried one. The comment
-    #: pass navigates to it; None means the caller falls back to a
-    #: constructed `<page>/posts/<id>` URL.
+    #: Permalink from the article; None means the caller constructs one.
     url: Optional[str] = None
 
 
@@ -40,8 +38,7 @@ class Comment:
     text: Optional[str]
     published_at: Optional[str]
     like_count: Optional[int]
-    #: 1-based position in Facebook's own ordering on the permalink page,
-    #: which defaults to "most relevant" -- so rank 1 is the top comment.
+    #: 1-based rank in Facebook's "most relevant" order, so 1 is the top.
     rank: int
 
 
@@ -64,9 +61,7 @@ _RELATIVE_PATTERNS = [
     (re.compile(r"^just now$", re.I), timedelta(0)),
 ]
 
-#: Seconds per relative-time unit. Vietnamese units are here because the
-#: Pages this crawler is pointed at render their timestamps in Vietnamese;
-#: an unrecognized unit silently costs the post its published_at.
+#: Vietnamese units included: the target Pages render timestamps in Vietnamese.
 _RELATIVE_SECONDS = {
     "s": 1, "sec": 1, "secs": 1, "second": 1, "seconds": 1, "giây": 1,
     "m": 60, "min": 60, "mins": 60, "minute": 60, "minutes": 60, "phút": 60,
@@ -232,9 +227,8 @@ def _extract_text(article: Tag) -> Optional[str]:
     return "\n".join(seen)
 
 
-#: Hosts whose links may be treated as a permalink. `l.facebook.com` is the
-#: outbound redirector and is deliberately absent: its `u=` parameter can
-#: carry any URL at all.
+#: Permalink hosts. l.facebook.com is deliberately absent: its `u=`
+#: parameter can carry any URL.
 _PERMALINK_HOSTS = frozenset(
     {
         "",
@@ -246,8 +240,7 @@ _PERMALINK_HOSTS = frozenset(
     }
 )
 
-#: Tried in order, so a real permalink wins over a photo or video link that
-#: happens to point at the same story.
+#: Tried in order, so a real permalink beats a photo or video link to it.
 _PERMALINK_HREF_PATTERNS = [
     re.compile(r"/permalink\.php\?"),
     re.compile(r"/posts/"),
@@ -257,9 +250,7 @@ _PERMALINK_HREF_PATTERNS = [
     re.compile(r"/photos?/"),
 ]
 
-#: Facebook decorates every feed link with tracking parameters. They are
-#: long, they are per-session, and keeping them would make the same post
-#: look like a different URL on every capture.
+#: Per-session tracking params; keeping them makes one post look like many.
 _DROPPED_QUERY_KEYS = frozenset(
     {"_rdr", "ref", "refsrc", "fref", "hc_location", "rdid", "share_url", "notif_t"}
 )
@@ -367,17 +358,7 @@ def parse(
     return posts, diagnostics
 
 
-# --- comments -------------------------------------------------------------
-#
-# Comment markup is the most obfuscated part of a Facebook page and the part
-# most likely to change. Everything below is deliberately best-effort: a
-# node that yields nothing becomes a Diagnostic rather than an exception,
-# so a comment this parser cannot read costs one diagnostic and not the
-# post it hangs under. Captures are not stored, so an improved parser
-# applies to the next crawl, never to an old one.
-
-#: A comment's container is `role="article"` like a post's; only the
-#: aria-label tells them apart.
+#: Comments share role="article" with posts; only the aria-label differs.
 _COMMENT_LABEL = re.compile(
     r"^\s*(comment|reply|commentaire|réponse|bình luận|phản hồi|trả lời)\b",
     re.I,
@@ -389,7 +370,6 @@ _COMMENT_AUTHOR_FROM_LABEL = re.compile(
     re.I,
 )
 
-#: A relative age tacked onto the end of an aria-label.
 _TRAILING_AGE = re.compile(
     r"\s+\d+\s*(?:" + "|".join(sorted(_RELATIVE_SECONDS, key=len, reverse=True))
     + r")\s*(?:ago|trước)?\s*$",
@@ -408,8 +388,6 @@ _LIKE_COUNT_PATTERNS = [
     re.compile(r"([\d.,]+)\s*(?:lượt thích|người khác)\b", re.I),
 ]
 
-#: Button and label text that lives inside a comment node but is chrome,
-#: not content.
 _COMMENT_CHROME = frozenset(
     {
         "like", "reply", "share", "edited", "author", "top fan", "follow",
@@ -475,7 +453,7 @@ def _strip_nested_articles(node: Tag) -> Tag:
 
     Every field extractor below walks descendants, so without this a
     parent comment would absorb its replies' text, author, likes and id.
-    Replies are a non-goal (plans/v3/00, D4); dropping them once here keeps
+    Replies are a non-goal; dropping them once here keeps
     every extractor simple.
     """
     clone = copy.copy(node)
@@ -493,9 +471,8 @@ def _extract_comment_id(node: Tag, post_id: str, author: Optional[str], text: Op
         match = pattern.search(node_html)
         if match:
             return match.group(1)
-    # No id in the markup: derive a stable one from the content so a repeat
-    # run updates the same row instead of inserting a duplicate. Editing the
-    # comment changes the digest, and therefore creates a new row.
+    # No id in the markup: hash the content so a repeat run updates the
+    # same row. An edit changes the digest, and so lands as a new row.
     digest = hashlib.blake2s(
         f"{author or ''}\x00{text or ''}".encode("utf-8"), digest_size=8
     ).hexdigest()
@@ -509,8 +486,7 @@ def _extract_comment_author(node: Tag) -> Optional[str]:
             return text
     match = _COMMENT_AUTHOR_FROM_LABEL.match(str(node.get("aria-label") or ""))
     if match:
-        # "Comment by Alice Nguyen 2 hours ago" -- the label runs the name
-        # and the age together, so the age has to come back off.
+        # The label runs name and age together: "Comment by Alice 2 hours ago".
         name = _TRAILING_AGE.sub("", match.group(1)).strip(" ,")
         if name:
             return name
@@ -521,8 +497,7 @@ def _extract_comment_time(node: Tag, captured_at: datetime) -> Optional[str]:
     stamped = _extract_published_at(node, captured_at)
     if stamped:
         return stamped
-    # Comments carry their age as the text of an ordinary link ("2 h",
-    # "1 ngày"), not in an <abbr> or <time>.
+    # Comment ages sit in ordinary link text ("2 h"), not in <abbr> or <time>.
     for tag in node.find_all(["a", "span"], limit=40):
         resolved = _parse_relative(tag.get_text(" ", strip=True), captured_at)
         if resolved:

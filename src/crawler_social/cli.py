@@ -211,8 +211,7 @@ def serve(
                 access_log=False,
             )
         else:
-            # uvicorn's own access log prints the raw query string, token
-            # included; the app's redacting request log replaces it.
+            # uvicorn's access log prints the raw query string, token included.
             uvicorn.run(
                 create_app(config),
                 host=host,
@@ -221,7 +220,6 @@ def serve(
                 access_log=False,
             )
     except KeyboardInterrupt:
-        # Ctrl-C on a running server is a normal shutdown, not an error.
         raise typer.Exit(0) from None
 
 

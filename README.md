@@ -1,12 +1,11 @@
 # crawler-social
 
-> **Start with [SIMPLE_PLAN.md](./SIMPLE_PLAN.md).** It defines the intentionally small
-> first version: one public Facebook Page, one SQLite database, five parsed fields, and
-> two CLI commands. (One thing has since moved on: captures are parsed for their text
-> and their markup discarded — see "What a crawl keeps" below.) The larger documents below are reference material for
+> **The first version is intentionally small:** one public Facebook Page, one SQLite
+> database, five parsed fields, and two CLI commands. (One thing has since moved on:
+> captures are parsed for their text and their markup discarded — see "What a crawl
+> keeps" below.) The larger documents below are reference material for
 > later expansion, not prerequisites for starting implementation. The active v1 supports
-> both macOS and desktop Linux; follow the ordered files in
-> [plans/v1/](./plans/v1/README.md).
+> both macOS and desktop Linux.
 
 **Current status: planning only; no application code has been written.** The detailed
 documents below capture the larger, originally macOS-oriented multi-source design frozen on
@@ -17,10 +16,8 @@ and only bring decisions forward when the working product actually needs them.
 
 ## Active v1
 
-Build one public Facebook Page crawler by following
-[plans/v1/00-environment.md](./plans/v1/00-environment.md), then continue in numeric order.
-Do not apply for other platform credentials, design private storage, or install a scheduler
-for this version.
+Build one public Facebook Page crawler. Do not apply for other platform credentials,
+design private storage, or install a scheduler for this version.
 
 ### Getting a session
 
@@ -43,9 +40,7 @@ CRAWLER_ATTACH_MODE=cdp uv run crawler crawl "https://www.facebook.com/<page>"
 ```
 
 A crawl that meets a login wall, checkpoint, or rate limit records the offending snapshot
-as evidence, leaves the watermark untouched, and exits `3` with the remedy. See
-[plans/v1/07-session-and-access.md](./plans/v1/07-session-and-access.md) for the full
-rationale, the pacing budgets, and the back-off ladder.
+as evidence, leaves the watermark untouched, and exits `3` with the remedy.
 
 ## What a crawl keeps
 
@@ -67,7 +62,7 @@ open — the `html` column is dropped, each snapshot's size is preserved, and th
 file is VACUUMed back down. Every post, comment, run, and snapshot row
 survives.
 
-## Web viewer (plans/v2)
+## Web viewer
 
 The crawler stores everything in one SQLite database, and a small web UI lets you browse
 it without the terminal:
@@ -90,7 +85,7 @@ uv run crawler serve          # http://127.0.0.1:8765
   HTML, because none is stored; the app's own pages carry a strict CSP with no inline
   script or style, stored post and comment text is escaped, and error pages expose
   nothing but a request id.
-- **Server-rendered, with two vendored libraries and no build step** (plans/v4).
+- **Server-rendered, with two vendored libraries and no build step.**
   Jinja renders every page complete; htmx then re-requests the *same* route and swaps
   one region out of the full response, so filtering `/posts` and following `/crawl`
   output no longer reload the page. Alpine (the CSP-friendly build, because the CSP
@@ -128,7 +123,7 @@ result set.
   its own when the crawl ends, because the idle panel it swaps back in carries no
   trigger.
 
-## Long posts and comments (plans/v3)
+## Long posts and comments
 
 Facebook truncates a long post body behind a **See more** button, and the hidden tail is
 genuinely absent from the DOM until that button is clicked — no amount of parsing
@@ -208,25 +203,22 @@ forward-only, and there is deliberately no bulk-enrol command anywhere in the CL
 | # | Document | What it settles | Lines |
 |---|---|---|---|
 | 1 | **README.md** (this file) | What the repo is, the reading order, status, next actions | 130 |
-| 2 | [PLAN.md](./PLAN.md) | Scope, per-platform reality, the frozen decisions in summary, **the milestone plan**, first-run, failure modes, **the deferred list with triggers**, **the verify-before-building checklist**, **the open questions for you** | 1,394 |
-| 3 | [ARCHITECTURE.md](./ARCHITECTURE.md) | The connector contract (`Envelope`, `Cursor`, `Coverage`, `Budget`, `Cap`), the core/connector seam, the import DAG, **the capability model**, **the CLI surface**, scheduling, rate limiting, the error taxonomy, secrets, testing | 1,595 |
-| 4 | [docs/DATA-MODEL.md](./docs/DATA-MODEL.md) | **The frozen DDL — the only copy in the repo** — both database files, threading, metrics, raw storage, FTS5 tuned for Vietnamese, the canonical queries and their real query plans | 2,568 |
-| 5 | [docs/GOVERNANCE.md](./docs/GOVERNANCE.md) | Privacy classes, the two-file split, encryption at rest, retention, redaction, upstream deletes, export gating, Vietnamese law | 921 |
-| 6 | [docs/DECISIONS.md](./docs/DECISIONS.md) | 63 ADRs: the full argument behind every frozen decision, including what was rejected and what would have to change to reopen it | 1,753 |
-| 7 | [docs/sources/](./docs/sources/) | One document per connector: [facebook](./docs/sources/facebook.md) · [telegram](./docs/sources/telegram.md) · [reddit](./docs/sources/reddit.md) · [x](./docs/sources/x.md) · [zalo](./docs/sources/zalo.md) | 3,824 |
+| 2 | [docs/DATA-MODEL.md](./docs/DATA-MODEL.md) | **The frozen DDL — the only copy in the repo** — both database files, threading, metrics, raw storage, FTS5 tuned for Vietnamese, the canonical queries and their real query plans | 2,568 |
+| 3 | [docs/GOVERNANCE.md](./docs/GOVERNANCE.md) | Privacy classes, the two-file split, encryption at rest, retention, redaction, upstream deletes, export gating, Vietnamese law | 921 |
+| 4 | [docs/DECISIONS.md](./docs/DECISIONS.md) | 63 ADRs: the full argument behind every frozen decision, including what was rejected and what would have to change to reopen it | 1,753 |
+| 5 | [docs/sources/](./docs/sources/) | One document per connector: [facebook](./docs/sources/facebook.md) · [telegram](./docs/sources/telegram.md) · [reddit](./docs/sources/reddit.md) · [x](./docs/sources/x.md) · [zalo](./docs/sources/zalo.md) | 3,824 |
 
 Do not read these documents before building v1. When a verified v1 is ready to expand, read
-PLAN, ARCHITECTURE, and DATA-MODEL in that order. Read GOVERNANCE before adding private
-data. DECISIONS and the source documents remain references for the feature being added.
+DATA-MODEL first. Read GOVERNANCE before adding private data. DECISIONS and the source
+documents remain references for the feature being added.
 
-**Three boundaries, so you never read the same thing twice.**
+**Two boundaries, so you never read the same thing twice.**
 
 - **The DDL appears in exactly one place**, DATA-MODEL §3. Every other document names tables
   and columns and never re-prints their definitions. A second copy of a schema is a copy that
   rots — and it did, in the draft this set replaced.
-- **The CLI appears in exactly one place**, ARCHITECTURE §11. Everything else links to it.
-- **PLAN §5 is the frozen decisions in summary**, one line of rationale each. DECISIONS
-  carries the full argument. When the two disagree, DECISIONS is right and PLAN has drifted.
+- **The CLI is defined in exactly one place**, `src/crawler_social/cli.py`. Every other
+  document names commands and flags and never re-prints their definitions.
 
 ---
 
@@ -238,11 +230,11 @@ data. DECISIONS and the source documents remain references for the feature being
   researched against primary sources where one could be reached. **Nothing was fetched from
   facebook.com, x.com, reddit.com, telegram.org or zalo.me** — that was a hard rule for the
   research, and it is why some claims are labelled second-hand rather than verified.
-- Confidence labels are uniform across all seven documents: `[verified]` = read from a
+- Confidence labels are uniform across all five documents: `[verified]` = read from a
   primary source · `[likely]` = multiple consistent secondary sources, no primary ·
-  `[unverified]` = must be confirmed before it is relied on. **Every unverified claim in the
-  set is collected in one place** — [PLAN §12](./PLAN.md#12-verify-before-building) — with
-  how to check it, roughly how long that takes, and what it blocks.
+  `[unverified]` = must be confirmed before it is relied on. Each document carries its own
+  list of unverified claims, with how to check one, roughly how long that takes, and what
+  it blocks.
 - **The frozen DDL was executed**, not just written. It runs clean on SQLite 3.51.0 and
   produces 30 tables, 41 indexes, 5 triggers and 1 view — 77 rows in `sqlite_master`. Both
   `ack_third_party` triggers abort, the `media.kind` and `usage_counters.metric` constraints
@@ -257,8 +249,7 @@ data. DECISIONS and the source documents remain references for the feature being
 ## Legacy next actions — deferred until after v1
 
 **Four things on day one, before any code.** Each has a multi-day latency you do not control,
-each is free, and each changes the plan if it comes back wrong. They are M0 in
-[PLAN §6](./PLAN.md#6-milestone-plan).
+each is free, and each changes the plan if it comes back wrong.
 
 1. **R0 — apply for a Reddit OAuth app.** Self-service registration ended in November 2025;
    every new client goes through manual review with a stated ~7-day target. This is the
@@ -267,8 +258,7 @@ each is free, and each changes the plan if it comes back wrong. They are M0 in
    decision.
 2. **T0 — get a Telegram `api_id`.** There is no review queue, but the self-service form is
    reported to fail opaquely for some accounts, and the entire "Telegram is connector #2"
-   decision rests on that credential existing. If it fails, the slot changes hands — PLAN §6
-   pre-makes that call.
+   decision rests on that credential existing. If it fails, the slot changes hands.
 3. **X0 — request your X data archive.** ~24h turnaround, and **the download link expires 7
    days after generation.** Then `unzip -l` it and paste the manifest into
    [docs/sources/x.md](./docs/sources/x.md) §2.3 — one command closes that connector's
@@ -277,7 +267,7 @@ each is free, and each changes the plan if it comes back wrong. They are M0 in
    an ordinary browser. Session age is an asset and the thresholds are enforced, not advisory:
    **≥ 3 days** before the first Page crawl, **≥ 14 days** before the first group.
 
-**Then answer the six questions in [PLAN §13](./PLAN.md#13-open-questions-for-you).** Four
+**Then answer the six remaining open questions.** Four
 earlier ones are already frozen as defaults with their costs stated. Of the six that remain,
 two are genuinely urgent:
 
@@ -290,7 +280,7 @@ two are genuinely urgent:
   boundary rather than a footnote, and it must be decided before the Telegram connector is
   built rather than discovered after the archive exists.
 
-**Read [PLAN §12](./PLAN.md#12-verify-before-building) before you commit to any number.**
+**Check the unverified claims before you commit to any number.**
 Nothing in this set is allowed to become a stated fact somewhere else without being checked
 first, and a plan built on a hallucinated rate limit is worse than one that says *confirm
 this*.

@@ -24,10 +24,8 @@ RATE_LIMITED = "rate_limited"
 UNAVAILABLE = "unavailable"
 EMPTY = "empty"
 
-#: Verdicts that mean "stop the run"; the crawl must not keep scrolling.
 BLOCKING = frozenset({LOGIN_WALL, CHECKPOINT, RATE_LIMITED, UNAVAILABLE})
 
-#: An article node needs at least this much text to count as real content.
 MIN_ARTICLE_TEXT = 30
 
 
@@ -73,12 +71,12 @@ _MESSAGES = {
     ),
 }
 
-# URL substrings. Kept, but now only as corroboration -- never the sole check.
+# URL substrings: corroboration only, never the sole check.
 _CHECKPOINT_URL = ("/checkpoint", "captcha", "two_factor", "confirmemail")
 _LOGIN_URL = ("/login.php", "/login/", "login.facebook.com", "/recover/")
 
-# Visible-text signals. Matched against text with <script>/<style> stripped,
-# so strings that merely appear inside Facebook's JS bundles cannot trip them.
+# Visible-text signals, matched after <script>/<style> are stripped so
+# Facebook's JS bundles cannot trip them.
 _CHECKPOINT_TEXT = (
     "confirm your identity",
     "we need to confirm",
@@ -175,8 +173,6 @@ def classify(html: bytes, url: str = "") -> Verdict:
     login_url_hit = _match(lowered_url, _LOGIN_URL)
     login_text_hit = _match(text, _LOGIN_TEXT)
     if login_url_hit or (login_text_hit and _has_password_input(soup)):
-        # A password field plus a login call to action, or an outright redirect
-        # to the login endpoint. Real content never renders a password box.
         reason = f"matched {login_url_hit or login_text_hit!r}"
         return Verdict(LOGIN_WALL, reason, articles)
 

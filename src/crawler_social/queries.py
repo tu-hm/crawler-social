@@ -16,12 +16,10 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
-#: Hard ceiling on page size, enforced here so the HTTP layer is not the
-#: only thing that clamps user input.
+#: Clamped here too, so the HTTP layer is not the only bound on user input.
 MAX_PAGE_SIZE = 200
 
-#: The only values the runs.status CHECK constraint accepts; anything else
-#: is a bug and the UI says so instead of pretending it is "completed".
+#: Mirrors the runs.status CHECK constraint in schema.py.
 RUN_STATUSES = frozenset({"running", "completed", "failed", "interrupted"})
 
 _BASE_POST_COLUMNS = (
@@ -54,8 +52,7 @@ def connect_ro(path: Path) -> sqlite3.Connection:
     )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=5000")
-    # Defense in depth: even a stray write statement on this connection
-    # fails instead of touching the file.
+    # Defense in depth on top of mode=ro: a stray write fails, never lands.
     conn.execute("PRAGMA query_only=ON")
     return conn
 
@@ -146,11 +143,8 @@ def list_posts(
         conn.execute(f"SELECT COUNT(*) FROM posts{where_sql}", params).fetchone()[0]
     )
     direction = "ASC" if order == "oldest" else "DESC"
-    # post_id breaks ties in the same direction as the key. Without it the
-    # sort is not total, so LIMIT/OFFSET paging over posts that share a
-    # timestamp may repeat or skip a row, and the order disagrees with
-    # post_neighbors -- which does tie-break -- so prev/next on the detail
-    # page can walk out of step with the list it came from.
+    # post_id makes the sort total: without it, LIMIT/OFFSET paging over equal
+    # timestamps can repeat or skip rows and disagree with post_neighbors.
     rows = conn.execute(
         f"SELECT {_post_columns(conn)} FROM posts{where_sql} "
         f"ORDER BY COALESCE(published_at, last_seen) {direction}, "
@@ -295,8 +289,7 @@ def post_neighbors(
     """
     key = post.get("published_at") or post.get("last_seen")
     post_id = post["post_id"]
-    # order="newest" sorts the key descending, so the next row has a
-    # smaller key; "oldest" is the reverse.
+    # "newest" sorts the key descending, so the next row has a smaller key.
     next_op, next_dir = ("<", "DESC") if order == "newest" else (">", "ASC")
     prev_op, prev_dir = (">", "ASC") if order == "newest" else ("<", "DESC")
 

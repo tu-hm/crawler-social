@@ -1,6 +1,4 @@
-{# Included by /posts, /runs and /snapshots, all of which wrap their rows
-   in #results -- so these four attributes are written once and work on all
-   three. Each anchor keeps its href: with htmx absent, it navigates. #}
+{# Every list page including this wraps its rows in #results. #}
 {% if pagination %}
 <nav class="pagination" aria-label="Pagination">
   <span class="page-info">showing {{ pagination.from }}–{{ pagination.to }} of {{ pagination.total }}</span>

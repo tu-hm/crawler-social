@@ -39,25 +39,18 @@ SCROLL_PAUSE_MS = 1500
 DEFAULT_MAX_SECONDS = 180.0
 HOME_URL = "https://www.facebook.com/"
 
-#: Every expansion click gets its own short timeout. Playwright's default is
-#: 30s; a stuck element must cost a second, not half a minute times a budget.
+#: Playwright's default click timeout is 30s -- too long inside a budget.
 CLICK_TIMEOUT_MS = 1500
-#: How many matches of a label pattern are examined for a visible one.
 _SCAN_LIMIT = 25
 
-#: Anchored, so "Xem them binh luan" ("view more comments") cannot match the
-#: plain "see more" that expands a body. A leading ellipsis is optional
-#: because Facebook renders the truncation mark inside the button on some
-#: surfaces ("... More").
+#: Anchored so "Xem them binh luan" ("view more comments") cannot match.
+#: The leading ellipsis is optional: some surfaces render "... More".
 SEE_MORE_PATTERN = re.compile(
     r"^\s*(?:\u2026|\.{3})?\s*(?:see\s+more|xem\s+th\u00eam|voir\s+plus|"
     r"mehr\s+anzeigen|ver\s+m\u00e1s|more)\s*$",
     re.IGNORECASE,
 )
-#: Attributes that mark a control as opening a menu, so it is never a text
-#: expander. A group page is full of them: the header kebab, the tab-bar
-#: overflow and the per-post action menu all carry the accessible name
-#: "Xem them" / "More", which is exactly what SEE_MORE_PATTERN matches.
+#: Menu semantics: group chrome buttons carry the same "Xem them"/"More" name.
 _MENU_ATTRS = ("aria-haspopup", "aria-expanded")
 #: Deliberately unanchored: Facebook renders counts inside the label.
 MORE_COMMENTS_PATTERN = re.compile(
@@ -72,9 +65,7 @@ MORE_REPLIES_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-#: Strip Chrome's automation banner switches. `--enable-automation` sets
-#: `navigator.webdriver` and advertises the session as automated; a session the
-#: user logged into by hand should not be announcing that on every request.
+#: --enable-automation sets navigator.webdriver and advertises automation.
 _IGNORE_DEFAULT_ARGS = ["--enable-automation"]
 
 _LAUNCH_ARGS = [
@@ -329,7 +320,6 @@ class CaptureOptions:
     max_candidates: int = MAX_CANDIDATE_POSTS
     scroll_pause_ms: int = SCROLL_PAUSE_MS
     jitter_ms: int = 900
-    #: Click "See more" so a truncated body reaches the DOM before capture.
     expand_text: bool = True
     max_expand_clicks: int = 12
 
@@ -354,11 +344,8 @@ def _is_text_expander(element) -> bool:
     return bool(SEE_MORE_PATTERN.search((text or "").strip()))
 
 
-#: Where readable content lives. Both roles are needed: on a group feed the
-#: post bodies sit directly under `role="feed"` and only the *comments* carry
-#: `role="article"`, while a permalink page has articles and no feed. Group
-#: chrome -- header, tab bar, right rail, chat -- is outside both, and that is
-#: where the look-alike menu buttons are.
+#: Group feeds keep post bodies under role="feed" and only comments in
+#: role="article"; permalinks have articles and no feed, so both are needed.
 _CONTENT_ROOTS = '[role="feed"], [role="article"]'
 
 
@@ -476,8 +463,6 @@ def expand_post_text(
             return True
         if _same_page(page.url, expected):
             return True
-        # A click navigated: undo it and stop expanding rather than keep
-        # clicking on whatever page we landed on.
         try:
             page.go_back(timeout=5000, wait_until="domcontentloaded")
         except Exception:  # noqa: BLE001 - best effort; the caller re-inspects
@@ -546,16 +531,12 @@ def capture_snapshots(
         first = True
 
         while time.monotonic() < deadline and not should_stop():
-            # Expand before reading the DOM: the hidden tail of a long post
-            # is not in `page.content()` until "See more" has been clicked.
             expand_post_text(page, options, rng, url=page_url)
             html, verdict = inspect(page, page_url)
             captured_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
             db.save_snapshot(conn, run_id, page_url, captured_at, html)
 
             if verdict.blocking:
-                # Committed above so the wall is on record, then stop. Never
-                # keep scrolling a wall: it stores nothing and looks like a bot.
                 raise BlockedError(verdict)
             if first and verdict.kind == wall.EMPTY:
                 print(f"warning: {verdict.message}")
@@ -574,15 +555,11 @@ DEFAULT_COMMENT_MAX_POSTS = 10
 
 @dataclass(frozen=True)
 class CommentOptions:
-    #: Comments wanted per post. 0 disables the pass entirely (D7).
     top_n: int = 0
-    #: Hard ceiling on permalink navigations in one run.
     max_posts: int = DEFAULT_COMMENT_MAX_POSTS
     max_more_clicks: int = 6
     max_expand_clicks: int = 20
-    #: After goto, before touching anything.
     settle_ms: int = 2500
-    #: Between posts, jittered.
     pause_ms: int = 2000
     max_seconds: float = 300.0
 
@@ -629,11 +606,9 @@ def _expand_comments(page, options: CommentOptions, rng: random.Random) -> None:
         clicks += landed
         grown = _visible_comment_count(page)
         if grown <= seen:
-            # The click did not add anything; more clicking will not either.
             break
         seen = grown
 
-    # Comment bodies truncate behind the same "See more" as post bodies.
     _click_repeatedly(
         page,
         SEE_MORE_PATTERN,
@@ -707,8 +682,6 @@ def capture_comments(
 
             html, verdict = inspect(page, post_url)
             captured_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            # Record before parse: the capture is on the run's books here,
-            # and only then does the caller parse the bytes.
             db.save_snapshot(conn, run_id, post_url, captured_at, html)
             if verdict.blocking:
                 raise BlockedError(verdict)

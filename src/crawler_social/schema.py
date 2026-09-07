@@ -9,11 +9,8 @@ CREATE TABLE IF NOT EXISTS runs (
     error        TEXT
 );
 
--- Capture metadata for one page load: what was fetched, when, and how big
--- it was. The markup itself is never stored -- a single feed capture is
--- several megabytes -- so what a crawl keeps out of it is the text, in
--- posts and comments. sha256 is over the captured bytes, which is what
--- makes a re-capture of an unchanged page recognisable.
+-- Markup is never stored, only the parsed text in posts and comments.
+-- sha256 is over the captured bytes, so an unchanged re-capture is recognisable.
 CREATE TABLE IF NOT EXISTS snapshots (
     id           INTEGER PRIMARY KEY,
     run_id       INTEGER NOT NULL REFERENCES runs(id),
@@ -34,10 +31,8 @@ CREATE TABLE IF NOT EXISTS posts (
     last_seen     TEXT NOT NULL
 );
 
--- Top comments for a post (plans/v3/02). rank_index is 1-based document
--- order on the permalink page, which Facebook orders by "most relevant" --
--- so rank 1 is the top comment. Replies nested under a comment are not
--- stored; only top-level comments are ranked.
+-- rank_index is 1-based order on the permalink page, which Facebook sorts by
+-- "most relevant". Replies are not stored, only top-level comments.
 CREATE TABLE IF NOT EXISTS comments (
     comment_id    TEXT PRIMARY KEY,
     post_id       TEXT NOT NULL REFERENCES posts(post_id),
@@ -58,8 +53,7 @@ CREATE TABLE IF NOT EXISTS state (
     updated_at      TEXT NOT NULL
 );
 
--- Viewer indexes (plans/v2/01-read-query-layer.md). Created by the crawler's
--- db.connect(), never by the server, but they only speed up reads.
+-- Viewer indexes, created by db.connect() and never by the server.
 CREATE INDEX IF NOT EXISTS idx_posts_page_url ON posts(page_url);
 CREATE INDEX IF NOT EXISTS idx_posts_sort ON posts(COALESCE(published_at, last_seen));
 CREATE INDEX IF NOT EXISTS idx_snapshots_run ON snapshots(run_id);

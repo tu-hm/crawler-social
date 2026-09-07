@@ -6,14 +6,11 @@ likely the author — does not relitigate a settled question, and can see at a g
 what would have to change for a decision to be worth reopening.
 
 Each entry is deliberately one screen. Where a decision rests on a fact that is not
-verified, the fact carries its confidence label here and appears in
-[../PLAN.md](../PLAN.md) §12 *Verify before building*, which is the consolidated list.
+verified, the fact carries its confidence label here.
 
-Read alongside: [../ARCHITECTURE.md](../ARCHITECTURE.md) (what the system *is*),
-[./DATA-MODEL.md](./DATA-MODEL.md) (the schema), [./GOVERNANCE.md](./GOVERNANCE.md)
-(privacy classes and retention), [./sources/](./sources/) (per-connector evidence),
-[../PLAN.md](../PLAN.md) (scope, the numbered milestones, the deferred list with its
-triggers, the verify checklist and the open questions),
+Read alongside: [./DATA-MODEL.md](./DATA-MODEL.md) (the schema),
+[./GOVERNANCE.md](./GOVERNANCE.md) (privacy classes and retention),
+[./sources/](./sources/) (per-connector evidence),
 [../README.md](../README.md) (what this repo is and the reading order).
 
 ---
@@ -92,7 +89,7 @@ triggers, the verify checklist and the open questions),
 | [0063](#adr-0063) | Legal baseline: Law 91/2025 + Decree 356/2025, no exemption assumed | Decree 13/2023 was repealed on 2026-01-01. |
 | **F. v2 — local web viewer** | | |
 | [0064](#adr-0064) | The web viewer is read-only and loopback-bound by construction | The crawler is the single writer; snapshot HTML is untrusted. |
-| [0066](#adr-0066) | *Revisited (plans/v4)* — htmx + Alpine vendored as plain files | Still server-rendered, still no build step; one rendering path, four static files. |
+| [0066](#adr-0066) | *Revisited* — htmx + Alpine vendored as plain files | Still server-rendered, still no build step; one rendering path, four static files. |
 
 ---
 
@@ -178,7 +175,7 @@ where they do not fit; an inherited lifecycle cannot.
 **Consequences.** `FixtureConnector` satisfies the same Protocol with no inheritance
 tax (ADR-0049). A connector's third-party client library (selenium, telethon,
 prawcore) lives inside its directory and **never leaks a type into core** — the
-generalization of the original plan's `stealth.py`-isolation argument (PLAN.md §5.5).
+generalization of the original plan's `stealth.py`-isolation argument.
 
 ---
 
@@ -321,8 +318,8 @@ auditable after the fact.
 
 **Context.** The worst failure mode in this class of tool is the one that *looks like
 success*: the run returns 0 items, "succeeds", the cursor advances, and every future
-run skips real content forever. PLAN.md §6 M7 identifies it for Facebook
-(empty-feed-with-HTTP-200); it recurs on every source.
+run skips real content forever. On Facebook it appears as
+empty-feed-with-HTTP-200; it recurs on every source.
 
 **Decision.** Three independent detectors, all owned by core:
 
@@ -510,7 +507,7 @@ encoding later would require rewriting every path, so it is frozen now.
 <a id="adr-0017"></a>
 ### ADR-0017 — `envelopes` is split from `envelope_fetches`
 
-**Context.** The original plan's `raw_payloads` (PLAN.md §5.5) carries both `sha256 UNIQUE` and
+**Context.** The original plan's `raw_payloads` carries both `sha256 UNIQUE` and
 `captured_at`.
 
 **Decision.** `envelopes` — one row per **distinct byte sequence**, `sha256` UNIQUE.
@@ -525,7 +522,7 @@ are byte-identical.
   independently.
 - *One table with no UNIQUE* — stores the same 400 KB HTML page 365 times a year.
 
-**Consequences.** This is the single most important correction to PLAN.md. Dedupe on
+**Consequences.** This is the single most important correction to the original plan. Dedupe on
 the blob stays free; history on the event is complete. The absence sweep (ADR-0030)
 depends on it entirely.
 
@@ -552,7 +549,7 @@ handed an id a previous scan had already passed. One keyword, a real bug.
 ### ADR-0019 — Metrics are a change-log, not a sample-log
 
 **Context.** Scores, reactions, views and comment counts drift after publication.
-PLAN.md's `post_counts` appends one row per crawl per post.
+The original plan's `post_counts` appends one row per crawl per post.
 
 **Decision.** `metric_observations(item_id, metric_id, observed_at) -> value`,
 WITHOUT ROWID, written **only when the value moved**, plus a denormalized
@@ -675,8 +672,8 @@ rule replaces them. The reason is correctness rather than caution: Vietnamese gi
 distributions are concentrated enough that name-based cross-platform matching is near a coin
 flip, and a wrong link silently poisons every query that reads it with no way to tell which
 rows are affected. `authors.actor_hmac` stays the per-source join key and is sufficient for
-everything the tool does, `purge --person` included. The deferred row and its trigger — *you
-actually want to link two accounts, by hand* — are in [../PLAN.md](../PLAN.md) §11.
+everything the tool does, `purge --person` included. It stays deferred behind one trigger:
+*you actually want to link two accounts, by hand*.
 
 ---
 
@@ -709,8 +706,8 @@ separation, because raw-first means the payload contains everything the parsed r
 contain and more.
 
 **One fork, declared rather than assumed.** "Identical DDL" rests on an unverified fact:
-whether the vendored SQLCipher build in `sqlcipher3` 0.6.2 has **FTS5** compiled in
-(PLAN.md §12 B1). If it does not, `CREATE VIRTUAL TABLE items_fts` fails and the statement
+whether the vendored SQLCipher build in `sqlcipher3` 0.6.2 has **FTS5** compiled in.
+If it does not, `CREATE VIRTUAL TABLE items_fts` fails and the statement
 list cannot be applied to `private.db` at all — which would break this invariant rather than
 merely inconvenience it. So the fork is written down: same statement list **minus the five
 FTS objects**, the divergence recorded in `schema_versions` as a declared state, `doctor`
@@ -737,7 +734,7 @@ enrol a conversation target if FileVault is off. On top of that, SQLCipher via
 - *`sqlcipher3-binary`* — verified Linux-only wheels (`manylinux2014_x86_64`) on
   SQLCipher 3.x. Wrong platform.
 - *SQLCipher for `social.db` too* — taxes the ~90% of rows that are public broadcast,
-  breaks `sqlite3 data/social.db ".schema"` and every ad-hoc query in PLAN.md §9, and
+  breaks `sqlite3 data/social.db ".schema"` and every ad-hoc query against it, and
   complicates the daily `.backup`, in exchange for protection against a threat
   FileVault already covers. Trigger to revisit: `social.db` needs to leave the machine.
 - *Application-layer AES-GCM on the body column only* — same dependency cost, and it
@@ -1059,7 +1056,7 @@ Also note the man page's own wording: *"If multiple keys are provided, launchd *
 > exists. Telegram listen mode is itself deferred with its own trigger (ADR-0058), and all
 > three Zalo transports are deferred or impossible (ADR-0060). This entry is kept because
 > the *argument* is right and worth not re-deriving; the trigger that unblocks it is
-> "the first real push producer exists", in [../PLAN.md](../PLAN.md) §11.
+> "the first real push producer exists".
 
 **Context.** A persistent Telegram listener, an inbound Zalo webhook and a polled HTTP
 endpoint look like three different scheduler lanes. Plus a fourth for file import.
@@ -1112,8 +1109,8 @@ quota settings drift apart. Two code paths keyed on `mode` — **if anyone ever 
 `max_items` (`--limit N`), `deadline_ts` (Facebook's 25-minute session cap),
 `spend_units` (X's per-run billable ceiling), `max_requests`, and the bucket. ~20
 lines, and it is the one piece of pacing that genuinely **is** shared, unlike the
-bucket constants themselves. PLAN.md §8's pacing table becomes the `facebook` entry
-with the numbers **unchanged**. Facebook publishes no rate headers, which is exactly
+bucket constants themselves. The original plan's pacing table becomes the `facebook`
+entry with the numbers **unchanged**. Facebook publishes no rate headers, which is exactly
 why its numbers must start conservative: the failure signal is a checkpoint, not a 429.
 
 ---
@@ -1144,7 +1141,7 @@ unit.
 **On price, corrected.** This entry previously said "every price figure is unverified".
 That is no longer true: two independent recon passes fetched
 `docs.x.com/x-api/getting-started/pricing` on 2026-09-01 and agree on every figure, so the
-published prices are `[verified]` (PLAN.md §12 C14). What survives is a different and
+published prices are `[verified]`. What survives is a different and
 sharper obligation — **`console.x.com` is the billing authority and docs lag** — so the
 `spend_cap` is typed as a **dollar ceiling** the user enters at enable time rather than
 derived from a price this plan believes, and the dry run prints the price it read from the
@@ -1234,7 +1231,7 @@ the source stays down until a human acts.
 **Decision.** Where a server supplies a duration, obey it **exactly**. Telegram's
 `FloodWaitError.seconds` is authoritative; if it exceeds **300s** the cursor is
 checkpointed and the run exits **75** for the next tick to resume. Facebook supplies
-nothing, so it gets policy backoff **15m → 1h → 4h → stop**, per PLAN.md §8 unchanged.
+nothing, so it gets policy backoff **15m → 1h → 4h → stop**.
 
 **Rejected.** A single house backoff curve applied to everyone — it would either ignore
 Telegram's authoritative number (and teach Telegram's heuristics that this account
@@ -1345,8 +1342,7 @@ three of them are lies.
 **Rejected.** A rich descriptive capability vocabulary — it looks like design and
 behaves like comments.
 
-**Consequences.** Every flag in [../ARCHITECTURE.md](../ARCHITECTURE.md) §6 names its
-exact branch point. `capabilities_note()` is grafted from thin-core because
+**Consequences.** Every capability flag names its exact branch point. `capabilities_note()` is grafted from thin-core because
 `BACKFILL_CAPPED` tells the user nothing, while *"backfill: groups only, via
 `getGroupChatHistory`; no 1:1 DM history method exists"* is exactly what they need to
 know about Zalo.
@@ -1354,7 +1350,7 @@ know about Zalo.
 **Two corollaries added after the flags and the source docs disagreed in five places.**
 
 1. **The `caps = (...)` block in each source doc is the source of truth**, because it is the
-   thing that ships as code. ARCHITECTURE §6's per-connector matrix is *derived* from those
+   thing that ships as code. Any per-connector capability matrix is *derived* from those
    blocks and says so; on any conflict the source doc wins and the matrix is the bug. This is
    not pedantry — the flags in that matrix are ones core *branches on*, so a wrong cell meant
    scheduling a comment-expansion phase for a connector with no such code, or billing the
@@ -1775,8 +1771,8 @@ test on a source that may never authenticate is unacceptable, while Telegram's
 > accounts."** Reddit's credential risk gets a free day-one spike for exactly this reason;
 > its counterpart premise deserved one too and now has it. **If T0 fails, Telegram is not
 > connector #2** — the slot goes to whichever of Reddit (if R0 came back approved) or the X
-> archive importer is available. That call is pre-made in PLAN §6 M0 rather than discovered
-> at M11.
+> archive importer is available. That call is pre-made at the day-one spike rather than
+> discovered at M11.
 
 **(2) It tests the architecture
 where it was chosen:** Telegram is the exact case that eliminated thin-core — one
@@ -1791,7 +1787,7 @@ wrong — the architecture's central thesis made concrete. Building all five con
 before running any — the contract is a hypothesis until two genuinely different
 transports have used it.
 
-**Consequences.** Facebook ships against PLAN.md **M1–M10** (Phase 1); only the
+**Consequences.** Facebook ships first, as Phase 1; only the
 machinery Facebook needs gets built (envelopes, cursors, coverage — always `opaque` —
 budget, verdicts, the SUSPECT trio, the run ledger, the canary). X goes last because it
 is the only connector where a bug costs **money** rather than time, and because its
@@ -1864,7 +1860,7 @@ so the restriction cannot be lost when the data moves.
 
 ## F. v2 — local web viewer
 
-*Added 2026-09-05 for the v2 server and UI (`plans/v2/`). The v1 rulings above stay
+*Added 2026-09-05 for the v2 server and UI. The v1 rulings above stay
 frozen; these follow the same format.*
 
 <a id="adr-0064"></a>
@@ -1916,7 +1912,7 @@ dependency injection maps exactly onto the per-request read-only connection that
 read-only-by-construction rule needs.
 
 **Consequences.** Three direct packages and their transitives enter the venv
-(audited in `plans/v2/09`: only fastapi, uvicorn, jinja2, pydantic, python-multipart
+(audited: only fastapi, uvicorn, jinja2, pydantic, python-multipart
 and their requirements). Starlette version coupling is accepted; nothing in v2
 imports Starlette directly except the hardening middlewares.
 
@@ -1944,7 +1940,7 @@ rendering paths to keep in sync for no capability the tool actually needs.
 not a stream. The win is that the rendered page is the whole contract: what the
 template renders is what the browser runs, and the CSP test greps prove it.
 
-**Revisited 2026-09-06 (plans/v4).** Two vendored files were added —
+**Revisited 2026-09-06.** Two vendored files were added —
 `static/vendor/htmx.min.js` (2.0.6) and `static/vendor/alpine-csp.min.js` (3.14.9)
 — so that `/posts` filtering and `/crawl` polling swap a region instead of
 reloading the page. The 68 lines of imperative wiring htmx replaced — the filter
@@ -1995,8 +1991,8 @@ need a rewrite that weakens v1's graceful-stop guarantees. Import-and-call in th
 server process — a crashed crawl would take the server down with it.
 
 **Consequences.** The page URL becomes a process argument and a browser navigation,
-so it is validated against an https + facebook.com allowlist before spawn
-(`plans/v2/08`). Output reaches the UI by polling the captured lines, never shared
+so it is validated against an https + facebook.com allowlist before spawn.
+Output reaches the UI by polling the captured lines, never shared
 memory.
 
 ---

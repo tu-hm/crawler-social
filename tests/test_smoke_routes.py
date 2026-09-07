@@ -1,4 +1,4 @@
-"""Verification gate for the web surface (plans/v2/10).
+"""Verification gate for the web surface.
 
 Two jobs:
 
@@ -32,14 +32,12 @@ from tests.conftest import make_config, make_db
 PAGE_URL = "https://www.facebook.com/ExamplePublicPage"
 CAPTURED_AT = datetime(2026, 2, 4, 12, 0, 0, tzinfo=timezone.utc)
 
-# Representative values for path parameters, by parameter name.
 PATH_PARAMS = {
     "post_id": "p1",
     "snapshot_id": "1",
     "run_id": "1",
 }
 
-# Query strings that exercise a route's interesting branch.
 ROUTE_QUERIES = {
     "/posts": "?q=hello&order=oldest&limit=25&offset=0&since=2026-01-01&until=2026-12-31",
     "/api/posts": "?q=hello&order=oldest&limit=25&offset=0&since=2026-01-01",
@@ -78,8 +76,7 @@ def _fill(path: str) -> str:
 
 def test_every_registered_route_is_smoke_tested(seeded_app):
     client = TestClient(seeded_app)
-    # FastAPI keeps include_router()'ed routes behind an _IncludedRouter
-    # wrapper in app.routes, so recurse; anything else unknown fails below.
+    # FastAPI hides include_router()'ed routes behind an _IncludedRouter wrapper.
     api_routes: list[APIRoute] = []
 
     def walk(routes) -> None:
@@ -110,10 +107,6 @@ def test_every_registered_route_is_smoke_tested(seeded_app):
             assert resp.status_code < 500, f"{method} {url} -> {resp.status_code}"
         exercised.add((route.path, methods))
 
-    # The route table and this walk cannot drift apart: every APIRoute was
-    # exercised, and every top-level non-APIRoute is the static mount or the
-    # include_router wrapper that held the API routes (docs routes are
-    # disabled, so there is nothing else to skip).
     assert len(exercised) == len(api_routes)
     for route in seeded_app.routes:
         if not isinstance(route, APIRoute):
@@ -168,7 +161,6 @@ def test_fixture_snapshot_end_to_end(db_file: Path):
     assert snapshot.status_code == 200
     assert str(len(raw_html))[:2] in snapshot.text or "KB" in snapshot.text
 
-    # The write path through db.py leaves a healthy database behind.
     ro = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True)
     try:
         assert ro.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

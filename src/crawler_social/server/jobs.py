@@ -1,6 +1,6 @@
 """The single crawl job slot for the viewer.
 
-Design constraints (plans/v2/08):
+Design constraints:
 - `run_crawl` installs SIGINT/SIGTERM handlers with `signal.signal`, which
   only works in the main thread of a process -- so the viewer never runs
   the pipeline in-process. It spawns `crawler crawl` as a subprocess with
@@ -23,12 +23,9 @@ from urllib.parse import urlsplit
 
 from ..facebook import check_gui_session
 
-#: Only these hosts may be crawled: the URL becomes a subprocess argument
-#: and a browser navigation, so arbitrary input is refused.
+#: The URL becomes a subprocess argument and a browser navigation.
 ALLOWED_HOSTS = frozenset({"facebook.com", "www.facebook.com", "m.facebook.com"})
-#: Ring buffer ceiling in lines.
 MAX_LINES = 500
-#: Grace period after SIGTERM before a stop escalates to SIGKILL.
 STOP_GRACE_SECONDS = 10
 
 
@@ -67,8 +64,6 @@ class CrawlJob:
         self._stop_requested: bool = False
         self._stop_sent_at: Optional[float] = None
 
-    # -- lifecycle ---------------------------------------------------------
-
     def reset(self) -> None:
         """Clear all state. For tests; production keeps one long-lived job."""
         with self._lock:
@@ -100,7 +95,7 @@ class CrawlJob:
         page_url = validate_page_url(page_url)
         try:
             check_gui_session(env)
-        except Exception as exc:  # CaptureError -- message names DISPLAY etc.
+        except Exception as exc:
             raise JobRefused(str(exc)) from exc
 
         argv = [
@@ -117,9 +112,7 @@ class CrawlJob:
             if comments_max_posts:
                 argv += ["--comments-max-posts", str(int(comments_max_posts))]
 
-        # The "already running" check and the spawn are one critical
-        # section. Split apart, two simultaneous POSTs both passed the
-        # check and both spawned a crawl.
+        # Check and spawn must stay one critical section, or two POSTs race.
         with self._lock:
             if self._process is not None and self._process.poll() is None:
                 raise JobRefused(
@@ -128,9 +121,7 @@ class CrawlJob:
             self.reset_locked()
             self._process = None
             try:
-                # A list argv with shell=False: the URL is one argument,
-                # never a shell string, so metacharacters cannot be
-                # interpreted.
+                # List argv, shell=False: the URL is an argument, not a shell string.
                 proc = subprocess.Popen(  # noqa: S603
                     argv,
                     stdout=subprocess.PIPE,
@@ -178,10 +169,8 @@ class CrawlJob:
         except subprocess.TimeoutExpired:
             try:
                 proc.kill()
-            except OSError:  # already gone
+            except OSError:
                 pass
-
-    # -- reporting ---------------------------------------------------------
 
     def running(self) -> bool:
         with self._lock:
@@ -206,12 +195,9 @@ class CrawlJob:
                 "lines_dropped": self._lines_dropped,
                 "exit_code": self._exit_code,
                 "stop_requested": self._stop_requested,
-                # A terminal crawl that hit the FileLock prints this; shown
-                # to the user as a readable note instead of a raw log.
+                # The message a terminal crawl prints when it hits the lock.
                 "lock_busy": any("holds the lock" in line for line in self._lines),
             }
-
-    # -- internals ---------------------------------------------------------
 
     def reset_locked(self) -> None:
         """Reset everything except the process slot; caller holds the lock."""
@@ -256,5 +242,4 @@ class CrawlJob:
                     self._exit_code = returncode
 
 
-#: The one job slot. The server process has exactly one at any time.
 crawl_job = CrawlJob()

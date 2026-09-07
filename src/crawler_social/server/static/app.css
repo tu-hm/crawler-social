@@ -1,4 +1,4 @@
-/* crawler-social viewer — hand-written, no external requests, light + dark. */
+/* No external requests: everything here must satisfy style-src 'self'. */
 
 :root {
   color-scheme: light dark;
@@ -56,8 +56,6 @@ a:hover { text-decoration: underline; }
 .mono, code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .muted { color: var(--fg-muted); }
 
-/* Header ------------------------------------------------------------- */
-
 .site-header {
   background: var(--bg-raised);
   border-bottom: 1px solid var(--border);
@@ -111,8 +109,6 @@ a:hover { text-decoration: underline; }
   white-space: nowrap;
 }
 
-/* Badges -------------------------------------------------------------- */
-
 .badge {
   display: inline-block;
   padding: 0.05rem 0.5rem;
@@ -135,8 +131,6 @@ a:hover { text-decoration: underline; }
 }
 
 mark { background: var(--mark-bg); color: inherit; padding: 0 1px; border-radius: 2px; }
-
-/* Page scaffolding ----------------------------------------------------- */
 
 main.wrap { padding: 1.25rem 1rem 3rem; }
 
@@ -185,8 +179,6 @@ h2 { font-size: 1rem; margin: 0 0 0.75rem; }
 .facts dt { color: var(--fg-muted); font-weight: 500; }
 .facts dd { margin: 0; }
 
-/* Tables ---------------------------------------------------------------- */
-
 .data-table {
   width: 100%;
   border-collapse: collapse;
@@ -199,9 +191,8 @@ h2 { font-size: 1rem; margin: 0 0 0.75rem; }
   vertical-align: top;
 }
 .data-table thead th {
-  /* Deliberately not sticky: .table-scroll must be a scroll container so wide
-     tables scroll sideways, which makes it the sticky scrollport instead of
-     the viewport and drops the header row on top of the first data row. */
+  /* Not sticky: .table-scroll is the scrollport, so a sticky header lands on
+     the first data row. */
   background: var(--bg-raised);
   font-size: 0.75rem;
   text-transform: uppercase;
@@ -222,8 +213,6 @@ h2 { font-size: 1rem; margin: 0 0 0.75rem; }
 }
 .secondary { color: var(--fg-muted); font-size: 0.8rem; }
 
-/* Forms and controls ----------------------------------------------------- */
-
 .filter-bar {
   display: flex;
   flex-wrap: wrap;
@@ -243,9 +232,8 @@ h2 { font-size: 1rem; margin: 0 0 0.75rem; }
   color: var(--fg-muted);
   margin-bottom: 0.2rem;
 }
-/* Every text-ish control, not just the three the filter bars started with:
-   the /crawl form's url and number inputs were falling through to the
-   browser's own widget styling. */
+/* All text-ish controls: /crawl's url and number inputs were falling through
+   to the browser's own widget styling. */
 input[type="text"], input[type="search"], input[type="date"],
 input[type="url"], input[type="number"], select {
   background: var(--bg);
@@ -258,15 +246,13 @@ input[type="url"], input[type="number"], select {
 }
 input[type="url"] { min-width: min(24rem, 100%); }
 
-/* :focus-visible must cover <button> too, or keyboard users get no ring on
-   Filter, Crawl now, Stop, or Copy text. */
+/* :focus-visible must cover <button> too, or those controls get no ring. */
 input:focus-visible, select:focus-visible, button:focus-visible,
 a:focus-visible, a.button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
-/* A bare submit button in a filter bar should look like the others. */
 .filter-bar button, .page-size-form button {
   border: 1px solid var(--border);
   background: var(--bg-raised);
@@ -287,8 +273,7 @@ a:focus-visible, a.button:focus-visible {
   color: var(--fg);
   border-radius: 6px;
   padding: 0.35rem 0.8rem;
-  /* font-family too: a <button class="button"> does not inherit the body
-     font, so the label rendered in the browser's default face. */
+  /* A <button> does not inherit the body font. */
   font-family: inherit;
   font-size: 0.85rem;
   font-weight: 500;
@@ -317,8 +302,6 @@ a:focus-visible, a.button:focus-visible {
 }
 .filter-chip a { font-weight: 700; }
 
-/* Pagination ------------------------------------------------------------- */
-
 .pagination {
   display: flex;
   align-items: center;
@@ -329,8 +312,6 @@ a:focus-visible, a.button:focus-visible {
 }
 .page-info { color: var(--fg-muted); font-size: 0.85rem; }
 .page-links { display: flex; gap: 0.5rem; }
-
-/* Empty state ------------------------------------------------------------- */
 
 .empty-state {
   border: 1px dashed var(--border);
@@ -348,8 +329,6 @@ a:focus-visible, a.button:focus-visible {
   padding: 0.25rem 0.6rem;
   font-size: 0.85rem;
 }
-
-/* Post detail -------------------------------------------------------------- */
 
 .post-text {
   font: inherit;
@@ -446,8 +425,6 @@ pre.source-view .ln {
 .col-error { max-width: 22rem; overflow-wrap: anywhere; font-size: 0.82rem; color: var(--fg-muted); }
 .error-text { color: var(--bad); font-size: 0.82rem; }
 
-/* Footer --------------------------------------------------------------------- */
-
 .site-footer {
   border-top: 1px solid var(--border);
   color: var(--fg-muted);
@@ -456,8 +433,6 @@ pre.source-view .ln {
   background: var(--bg-raised);
 }
 .footer-row { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
-
-/* Posts table extras ---------------------------------------------------------- */
 
 .result-count { color: var(--fg-muted); font-size: 0.85rem; margin: 0.25rem 0; }
 .table-scroll { overflow-x: auto; }
@@ -494,7 +469,6 @@ pre.source-view .ln {
   margin: -1px;
 }
 
-/* Off-screen until focused, then a normal button in the top-left. */
 .skip-link {
   position: absolute;
   left: 0.5rem;
@@ -521,8 +495,7 @@ pre.source-view .ln {
   .db-path { display: none; }
   .facts, .detail-grid { grid-template-columns: 1fr; }
   .facts dd, .detail-grid dd { margin-bottom: 0.4rem; }
-  /* A one-line clipped excerpt is unreadable in a phone-width column, and
-     the table already scrolls sideways; let the text wrap instead. */
+  /* A clipped one-line excerpt is unreadable at phone width. */
   .excerpt, .post-link {
     white-space: normal;
     text-overflow: clip;
@@ -537,27 +510,18 @@ pre.source-view .ln {
   .site-header { position: static; }
 }
 
-/* --- Vendored library support (plans/v4) --------------------------------- */
-
-/* htmx injects these three rules itself unless includeIndicatorStyles is
-   false, and an injected <style> element violates style-src 'self'. Copied
-   from htmx 2.0.6 verbatim so the behaviour is identical to its default:
-   note the transition sits on the .htmx-request selectors, so an indicator
-   fades in but not out. */
+/* Verbatim from htmx 2.0.6: it injects these itself unless
+   includeIndicatorStyles is false, and an injected <style> breaks style-src 'self'. */
 .htmx-indicator { opacity: 0; }
 .htmx-request .htmx-indicator { opacity: 1; transition: opacity 200ms ease-in; }
 .htmx-request.htmx-indicator { opacity: 1; transition: opacity 200ms ease-in; }
 
-/* hx-indicator="#results" puts .htmx-request on the results region while a
-   filter or page request is in flight. Without a rule of its own that class
-   would be inert -- there is no .htmx-indicator element to reveal -- so the
-   region dims instead of flickering between two states. */
+/* #results has no .htmx-indicator child, so the class would be inert without
+   this; dim the region instead. */
 #results.htmx-request {
   opacity: 0.55;
   transition: opacity 120ms ease-in;
 }
 
-/* Alpine removes x-cloak once it has initialised the component. Without
-   this rule -- or without JavaScript at all -- an element that exists only
-   to show an Alpine state would be visible as a dead control. */
+/* Without this -- or without JS -- an Alpine-only control shows up dead. */
 [x-cloak] { display: none !important; }

@@ -1,29 +1,12 @@
-/*
- * Progressive enhancements only: every viewer feature must work with this
- * file, and both vendored libraries, disabled. No build step and no network
- * requests -- htmx and Alpine are plain files under /static/vendor.
- *
- * What used to live here and no longer does: the filter-form auto-submit
- * (now hx-trigger on the forms themselves) and the /crawl status poll (now
- * hx-trigger="every 2s" on a panel that swaps itself away when the crawl
- * ends). See plans/v4/02-htmx-interactions.md.
- *
- * Alpine is the @alpinejs/csp build, because script-src 'self' carries no
- * unsafe-eval. Attributes may only NAME a property or method -- every
- * expression lives in the Alpine.data() registrations below.
- */
+// Alpine is the CSP build: no unsafe-eval under script-src 'self', so an attribute
+// may only name a property or method registered below.
 (function () {
   "use strict";
 
   document.documentElement.classList.add("js");
 
-  // --- The crawl log's scroll anchor ---------------------------------------
-  //
-  // The log's innerHTML is swapped out of band on every /crawl poll. Only
-  // follow the tail for a reader who is already at the bottom, so polling
-  // never pulls the view away from a line being read. This is an htmx event
-  // listener rather than an Alpine component on purpose: Alpine state lives
-  // on an element, and this element's contents are replaced every 2s.
+  // Follow the log tail only for a reader already at the bottom; htmx
+  // replaces this element's contents on every poll.
   var logAtBottom = true;
 
   document.addEventListener("htmx:beforeSwap", function () {
@@ -37,11 +20,7 @@
     if (log && logAtBottom) log.scrollTop = log.scrollHeight;
   });
 
-  // --- Alpine components ---------------------------------------------------
   document.addEventListener("alpine:init", function () {
-    // Copy the post text. Replaces the old [data-copy-target] loop; the
-    // attribute stays because it is the template's way of saying which
-    // element to read, and a selector hard-coded here would be worse.
     Alpine.data("copyButton", function () {
       return {
         idle: true,
@@ -67,8 +46,6 @@
       };
     });
 
-    // Show a run's full error text in the list, instead of only the first
-    // 120 characters with /runs/{id} as the sole way to read the rest.
     Alpine.data("disclosure", function () {
       return {
         closed: true,
@@ -82,13 +59,8 @@
       };
     });
 
-    // What the crawl form's numbers actually cost. Every comment asked for
-    // is one permalink navigation, which plans/v3 calls the most bot-visible
-    // thing this project does, so the form says so in numbers.
-    //
-    // Reads the inputs on `input` rather than binding them with x-model:
-    // x-model has to write back into the component, and that path is not
-    // one this build's docs promise. A method call is unambiguous.
+    // Reads the inputs on `input`: x-model's write-back into the component
+    // is not a path this build's docs promise.
     Alpine.data("crawlCost", function () {
       return {
         estimate: "",

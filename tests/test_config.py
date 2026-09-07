@@ -1,4 +1,4 @@
-"""Required tests from plans/v2/00-scope-and-preflight.md."""
+"""Tests for configuration loading."""
 
 from __future__ import annotations
 
@@ -63,9 +63,6 @@ def test_readonly_connection_selects_but_cannot_create(tmp_path: Path):
             conn.execute("CREATE TABLE hack (x INTEGER)")
     finally:
         conn.close()
-
-
-# -- v3: comment and expansion settings -------------------------------------
 
 
 def test_comment_settings_default_to_off():

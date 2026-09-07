@@ -1,4 +1,4 @@
-"""Tests for `parser.parse_comments` (plans/v3/04).
+"""Tests for `parser.parse_comments`.
 
 Offline like the rest of the parser tests: bytes in, dataclasses out.
 """

@@ -6,8 +6,6 @@
   <a class="button" href="/state">Watermarks (/state)</a>
 </div>
 
-{# The htmx swap region; partials/pagination.html targets #results on
-   every list page, which is why the id is generic. #}
 <div id="results">
 {% if rows %}
 <div class="table-scroll">
@@ -38,11 +36,7 @@
         {% endif %}
       </td>
       <td class="num">{{ run.snapshot_count }}</td>
-      {# A long error was readable only on /runs/{id}. The full text is
-         rendered alongside the excerpt and revealed in place; the toggle
-         carries x-cloak so no dead control appears without JavaScript,
-         and the excerpt stays visible in that case. Capped at 2000
-         characters so a stack trace cannot bloat the list page. #}
+      {# x-cloak on the toggle so no dead control appears without JavaScript; capped so a stack trace cannot bloat the page. #}
       {% set long_error = run.error and run.error | length > 120 %}
       <td class="col-error"{% if long_error %} x-data="disclosure"{% endif %}>
         {%- if long_error %}

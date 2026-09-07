@@ -50,7 +50,6 @@ class Config:
     serve_host: str = DEFAULT_SERVE_HOST
     serve_port: int = DEFAULT_SERVE_PORT
     serve_token: str | None = None
-    #: Comments to collect per post; 0 keeps the comment pass off (v3 D7).
     top_comments: int = DEFAULT_TOP_COMMENTS
     comments_max_posts: int = DEFAULT_COMMENTS_MAX_POSTS
     expand_text: bool = True

@@ -1,4 +1,4 @@
-"""Required tests from plans/v2/07-runs-dashboard.md."""
+"""Tests for the runs dashboard."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def test_runs_listed_newest_first_with_statuses(runs_client: TestClient):
     assert resp.status_code == 200
     first = resp.text.index('href="/runs/4"')
     last = resp.text.index('href="/runs/1"')
-    assert first < last  # newest first
+    assert first < last
     for status in ("completed", "failed", "interrupted", "running"):
         assert f"badge-{status}" in resp.text
     assert "boom: captcha wall" in resp.text
@@ -73,10 +73,9 @@ def test_stale_running_run_is_flagged_but_not_modified(
     resp = runs_client.get("/runs")
     assert resp.status_code == 200
     assert ">running (stale)</span>" in resp.text
-    assert resp.text.count(">running (stale)</span>") == 1  # fresh run not flagged
+    assert resp.text.count(">running (stale)</span>") == 1
     assert ">running</span>" in resp.text
-    assert "almost certainly died" in resp.text  # the explanation
-    # The stored row is untouched: status stays exactly "running".
+    assert "almost certainly died" in resp.text
     from crawler_social import queries
 
     conn = queries.connect_ro(db_file)
@@ -86,7 +85,7 @@ def test_stale_running_run_is_flagged_but_not_modified(
         conn.close()
     running = [r for r in rows if r["status"] == "running"]
     assert len(running) == 3  # the stale one plus the fixture's two fresh ones
-    assert all(r["finished_at"] is None for r in running)  # rows left as stored
+    assert all(r["finished_at"] is None for r in running)
 
 
 def test_run_detail_shows_snapshots_and_approximate_yield(runs_client: TestClient):
@@ -94,9 +93,9 @@ def test_run_detail_shows_snapshots_and_approximate_yield(runs_client: TestClien
     assert resp.status_code == 200
     assert "approximate" in resp.text.lower()
     assert 'href="/snapshots/1"' in resp.text
-    assert "/posts/p1" in resp.text  # first_seen inside the window
+    assert "/posts/p1" in resp.text
     assert "caught by run one" in resp.text
-    assert "ancient" not in resp.text  # first_seen outside the window
+    assert "ancient" not in resp.text
 
 
 def test_run_detail_unknown_id_is_404_page(runs_client: TestClient):
@@ -117,13 +116,12 @@ def test_state_lists_watermarks_and_links_existing_posts(
     )
     resp = runs_client.get("/state")
     assert resp.status_code == 200
-    assert 'href="/posts/p1"' in resp.text  # existing post is linked
-    assert "post no longer stored" in resp.text  # unknown id stays plain text
+    assert 'href="/posts/p1"' in resp.text
+    assert "post no longer stored" in resp.text
 
 
 def test_home_health_panel_counts_from_first_seen(runs_client: TestClient, db_file: Path):
-    # The fixture already stored p1 (first seen 3h ago) and p2 (20d ago);
-    # make_db appends to the same file, so both sets count.
+    # make_db appends: the db already holds p1 (3h ago) and p2 (20d ago).
     make_db(
         db_file,
         posts=[
@@ -211,8 +209,6 @@ def test_chart_empty_state_when_no_recent_posts(tmp_path: Path):
 
 
 def test_no_route_opens_a_writable_connection(runs_client: TestClient, db_file: Path):
-    # Make the database read-only on disk: any write attempt anywhere in
-    # these routes would fail loudly instead of silently succeeding.
     os.chmod(db_file, 0o444)
     try:
         assert runs_client.get("/runs").status_code == 200

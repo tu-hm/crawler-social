@@ -13,4 +13,4 @@ are the same size and the same upstream filename, and grepping either for
 `Function(` gives the same answer — the reliable check is the string
 `CSP-friendly build`, which only the CSP build carries. `script-src 'self'`
 in `hardening.py` has no `unsafe-eval`, so stock Alpine cannot evaluate a
-single attribute. See `plans/v4/01-vendor-and-config.md` §5.
+single attribute.

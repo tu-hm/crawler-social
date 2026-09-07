@@ -16,9 +16,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 GOOD_PAGE = (FIXTURES / "facebook_page_sample.html").read_bytes()
 
-#: Real captures from a run that reported success while storing nothing. The
-#: Page one is the important case: Facebook served it at /NASA with no
-#: redirect, which is exactly what the old URL-only check could not see.
+#: Real captures from a run that reported success while storing nothing.
 REAL_WALLS = sorted(FIXTURES.glob("facebook_login_wall_*.html"))
 
 LOGIN_HTML = b"""
@@ -43,7 +41,6 @@ def test_good_page_classifies_ok():
 
 
 def test_login_wall_detected_without_url_hint():
-    # The whole point: Facebook serves this at the Page's own URL, unredirected.
     verdict = wall.classify(LOGIN_HTML, "https://www.facebook.com/NASA")
     assert verdict.kind == wall.LOGIN_WALL
     assert verdict.blocking

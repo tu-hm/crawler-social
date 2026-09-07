@@ -225,7 +225,7 @@ The connector contributes **zero** gap-detection code. It only tells the truth a
 
 > `listings hard-stop at ~1000 items via 'after' fullnames; there is no page 11. Backfill beyond that comes from Arctic Shift (archive, ~36h stale metrics), not from Reddit. Deep history for a specific subreddit: pull the monthly .zst dump.`
 
-`Cap.BACKFILL_CAPPED` is set, not `Cap.BACKFILL` — and **the capped flag implies the plain one for CLI argument validation**, so `crawler crawl --source reddit --target r/vietnam --since 2y` is accepted, prints the ceiling and proceeds rather than being rejected at argument parsing or silently returning a truncated archive. Command spellings are normative in [../../ARCHITECTURE.md](../../ARCHITECTURE.md) §11.
+`Cap.BACKFILL_CAPPED` is set, not `Cap.BACKFILL` — and **the capped flag implies the plain one for CLI argument validation**, so `crawler crawl --source reddit --target r/vietnam --since 2y` is accepted, prints the ceiling and proceeds rather than being rejected at argument parsing or silently returning a truncated archive. Command spellings are defined by the CLI itself.
 
 ---
 
@@ -313,7 +313,7 @@ Items whose content came from the archive are still ordinary `items` rows. Prove
 
 `[verified]` Arctic Shift is **one volunteer's donation-funded free service with no uptime or performance guarantee**, and this design gives it a load-bearing backfill role. Mitigations, in order:
 
-1. **The dumps are the artifact; the API is convenience.** *Arctic Shift bulk `.zst` dumps pulled to local disk* is a deferred item in [../../PLAN.md](../../PLAN.md) §11 with a stated trigger: **an unfilled `gaps` row older than 30 days, or Arctic Shift's API becoming unreliable.** Honour it.
+1. **The dumps are the artifact; the API is convenience.** *Arctic Shift bulk `.zst` dumps pulled to local disk* is a deferred item with a stated trigger: **an unfilled `gaps` row older than 30 days, or Arctic Shift's API becoming unreliable.** Honour it.
 2. `[unverified]` **Spot-check coverage before trusting it for a specific subreddit** — `GET /api/time_series?key=r/<sub>/posts/count&precision=day` against your own item counts.
 3. Never let a Reddit gap-drain failure fail the Reddit tick. It is a separate run (`runs.mode = 'backfill'`) and its failure is `RETRY`, not `STOP`.
 
@@ -388,7 +388,7 @@ Not set, deliberately:
 | `Cap.BACKFILL` | the 1,000 wall — `BACKFILL_CAPPED` is the honest value |
 | `Cap.NEEDS_SESSION`, `NEEDS_GUI`, `SINGLE_FLIGHT` | stateless HTTP; nothing to serialise, no GUI, no file lock |
 | **`Cap.EXACT_CURSOR`** | **not set, deliberately.** The flag means *resume needs no overlap re-read at all* — and this connector keeps a **6-hour overlap** on purpose (§7.3 step 4) as cheap insurance against clock skew, sticky posts and remove-then-reinstate. An earlier draft set the flag and redefined it locally to mean "no *unbounded* re-read", which would have had core skip the very window the design relies on. **The coverage claim is a separate axis:** listing envelopes still claim `Coverage(EXACT)` on their own honesty about what their bytes contain, and that is unaffected |
-| `Cap.FILE_IMPORT` | no archive ZIP. *(There is no `Cap.PUSH` in the enum at all — ARCHITECTURE §6.)* |
+| `Cap.FILE_IMPORT` | no archive ZIP. *(There is no `Cap.PUSH` in the enum at all.)* |
 | `Cap.DELETE_EVENTS` | Reddit reports no deletion events — **the absence sweep stays mandatory** |
 | `Cap.BILLED` | free tier; nothing to meter in `usage_counters` |
 | `Cap.CONVERSATIONS` | never writes `private.db` (§3) |
@@ -624,7 +624,7 @@ Change-log, not sample-log. A row is written **only when the value moved**.
 - **The schedule stops.** `+1h / +6h / +24h / +72h / +7d, then stop` means each item generates **five** refresh events total. Nothing is re-observed daily forever.
 - **Byte-identical responses create `envelope_fetches` rows (~40 bytes), not `envelopes` rows.** That is the entire point of the split above.
 
-So the growth term that matters is `envelope_fetches`, plus Facebook's HTML snapshots at ~50 KB compressed per scroll step. **The compaction pass is dropped, not deferred** ([../../PLAN.md](../../PLAN.md) §11): the retention sweep and `envelopes.purge_after` already bound the store, and a trigger sized against a hundredfold-inflated number is worse than no trigger.
+So the growth term that matters is `envelope_fetches`, plus Facebook's HTML snapshots at ~50 KB compressed per scroll step. **The compaction pass is dropped, not deferred**: the retention sweep and `envelopes.purge_after` already bound the store, and a trigger sized against a hundredfold-inflated number is worse than no trigger.
 
 ### 10.7 Bookkeeping
 
@@ -780,7 +780,7 @@ Three tiers, all offline:
 
 ## 14. Verify before building
 
-**The consolidated list is [../../PLAN.md](../../PLAN.md) §12**; this is the Reddit subset with its per-item consequence. Ordered by what blocks what. Items 1–2 gate the connector's existence; 3–7 gate correctness; 8–12 are cheap confirmations.
+This is the Reddit subset of the unverified claims, with its per-item consequence. Ordered by what blocks what. Items 1–2 gate the connector's existence; 3–7 gate correctness; 8–12 are cheap confirmations.
 
 | # | Claim | Confidence | How to settle it | Blocks |
 |---|---|---|---|---|
@@ -793,7 +793,7 @@ Three tiers, all offline:
 | 7 | Vote fuzzing is still active | `[unverified]` | fetch one post's score 5× in a minute; compare | whether `approximate=1` is honest (keep it either way) |
 | 8 | `syntax=cloudsearch` + `timestamp:START..END` still functions | `[unverified]` | **one query.** If it works it is a bonus fast path. Nothing depends on it. | nothing |
 | 9 | Arctic Shift coverage for *your* target subreddits | `[unverified]` | `GET /api/time_series?key=r/<sub>/posts/count&precision=day` vs your own counts | trust in the gap drain |
-| 10 | The 5 Aug 2026 r/redditdev post and **two** dates from it: **30 September 2026** (register an existing/grandfathered app so its feedback counts) and **31 December 2026** (deadline to opt into Reddit's Migration Program) | `[likely]` — both second-hand | Check directly — **30 September is this month**, and **31 December is the one that decides whether an approved app survives into 2027**, which is exactly the kind of date discovered after it has passed. Both are dated checkboxes in [../../PLAN.md](../../PLAN.md) §6 M0 | optionality into 2027 |
+| 10 | The 5 Aug 2026 r/redditdev post and **two** dates from it: **30 September 2026** (register an existing/grandfathered app so its feedback counts) and **31 December 2026** (deadline to opt into Reddit's Migration Program) | `[likely]` — both second-hand | Check directly — **30 September is this month**, and **31 December is the one that decides whether an approved app survives into 2027**, which is exactly the kind of date discovered after it has passed. Both are dated checkboxes for day one | optionality into 2027 |
 | 11 | Current RSS rate limit and the `user=`/`feed=` workaround | `[unverified]` | only if R0 fails; the workaround is a community finding, not documented | §12 only |
 | 12 | Commercial pricing ($0.24/1k calls; ~$12,000 minimum) | `[unverified]` | do not quote these. Reddit publishes no rate card. | nothing — recorded so it is not repeated as fact |
 
@@ -816,4 +816,4 @@ Three tiers, all offline:
 
 ---
 
-*See also: [../DATA-MODEL.md](../DATA-MODEL.md) for the full DDL and the canonical queries · [../../ARCHITECTURE.md](../../ARCHITECTURE.md) for the connector contract, `Envelope`, `Coverage`, `Budget` and the verdict taxonomy · [./x.md](./x.md) for the other REST connector, and the contrast between a quota governor and a spend governor.*
+*See also: [../DATA-MODEL.md](../DATA-MODEL.md) for the full DDL and the canonical queries · [./x.md](./x.md) for the other REST connector, and the contrast between a quota governor and a spend governor.*

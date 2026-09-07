@@ -1,4 +1,4 @@
-"""Required tests from plans/v2/08-trigger-crawl.md.
+"""Tests for the crawl trigger.
 
 Every test patches subprocess.Popen -- no test launches a real browser
 or a real crawl.
@@ -45,10 +45,8 @@ class FakeProc:
         return self._poll_result
 
     def wait(self, timeout=None):
-        # Model a real Popen.wait: block for up to `timeout`, then raise
-        # TimeoutExpired if the child is still going. The stop watchdog
-        # depends on that blocking, so returning at once would make it
-        # look like it escalates instantly.
+        # The stop watchdog needs wait() to really block, or escalation
+        # would look instant.
         if self._poll_result is None and timeout is not None:
             time.sleep(timeout)
         if self._poll_result is None:
@@ -78,9 +76,8 @@ def fresh_job(monkeypatch):
     jobs.crawl_job.reset()
     Recorder.calls = []
     monkeypatch.setattr(jobs.subprocess, "Popen", FakeProc)
-    # The HTML routes consult the GUI session; stub it so route behavior
-    # is deterministic headless or not. (jobs.check_gui_session stays real
-    # so the pass-through test below exercises the actual function.)
+    # jobs.check_gui_session stays real so the pass-through test below
+    # exercises it.
     monkeypatch.setattr(pages_module, "check_gui_session", lambda env=None: None)
     yield
     jobs.crawl_job.reset()
@@ -107,7 +104,7 @@ def test_start_refuses_when_a_job_is_already_running():
     assert len(Recorder.calls) == 1
     with pytest.raises(JobRefused, match="already running"):
         jobs.crawl_job.start(HTTPS_PAGE, 5, env=DESKTOP_ENV)
-    assert len(Recorder.calls) == 1  # no second process
+    assert len(Recorder.calls) == 1
 
 
 def test_start_refuses_non_https_and_foreign_hosts():
@@ -132,14 +129,12 @@ def test_shell_metacharacters_stay_one_argument():
     tricky = "https://facebook.com/x?q=; rm -rf ~"
     jobs.crawl_job.start(tricky, 5, env=DESKTOP_ENV)
     argv, kwargs = Recorder.calls[0]
-    assert tricky in argv  # one argument, untouched
+    assert tricky in argv
     assert kwargs["shell"] is False
 
 
 def test_gui_check_on_linux_names_display():
-    # The real check_gui_session, pinned to the Linux branch so the
-    # assertion holds on any host: macOS has no DISPLAY to look at and
-    # returns early by design, which used to fail this test there.
+    # Pinned to the linux branch: macOS has no DISPLAY and returns early.
     from crawler_social.facebook import check_gui_session
 
     with pytest.raises(CaptureError, match="DISPLAY"):
@@ -149,8 +144,6 @@ def test_gui_check_on_linux_names_display():
 
 
 def test_gui_failure_is_passed_through_as_job_refused(monkeypatch):
-    # start() turns a CaptureError from the GUI check into a JobRefused
-    # carrying the same message, and starts nothing.
     def refuse(env=None, **kwargs):
         raise CaptureError("No graphical session found: DISPLAY is empty.")
 
@@ -183,7 +176,7 @@ def test_post_with_matching_origin_starts_the_crawl(client: TestClient):
         "/crawl",
         data={"page_url": HTTPS_PAGE, "limit": "5", "csrf_token": token},
         headers={"Origin": "http://testserver"},
-        follow_redirects=False,  # the 303 to /crawl must be the response
+        follow_redirects=False,
     )
     assert resp.status_code == 303
     assert len(Recorder.calls) == 1
@@ -209,10 +202,9 @@ def test_post_refusal_renders_the_reason(client: TestClient, monkeypatch):
         data={"page_url": HTTPS_PAGE, "limit": "5", "csrf_token": token},
         headers={"Origin": "http://testserver"},
     )
-    # 409, not 200: nothing was started, so the refusal is not a
-    # successful page view for a client or a cache to treat as one.
+    # 409, not 200: nothing was started, so this is not a page view.
     assert resp.status_code == 409
-    assert "DISPLAY is empty" in resp.text  # the reason is shown, not hidden
+    assert "DISPLAY is empty" in resp.text
     assert Recorder.calls == []
 
 
@@ -255,20 +247,17 @@ def test_stop_sends_sigterm_first_not_sigkill():
     assert jobs.crawl_job.stop() is True
     assert fake.signals == [signal.SIGTERM]
     assert fake.killed is False
-    # A second call inside the grace period does not escalate yet.
     jobs.crawl_job.stop()
     assert fake.signals == [signal.SIGTERM]
     assert fake.killed is False
-    # After the 10-second grace, the next stop escalates to SIGKILL.
+    # 11 > the 10-second grace, so the next stop escalates to SIGKILL.
     jobs.crawl_job._stop_sent_at = time.monotonic() - 11
     jobs.crawl_job.stop()
     assert fake.killed is True
 
 
 def test_stop_escalates_on_its_own_after_the_grace_period(monkeypatch):
-    # One click of Stop has to be enough. The escalation used to need a
-    # second stop() the UI never made, so a crawl that ignored SIGTERM
-    # was never killed; a watchdog thread now does it.
+    # Regression: escalation needed a second stop() the UI never made.
     monkeypatch.setattr(jobs, "STOP_GRACE_SECONDS", 0.05)
     jobs.crawl_job.start(HTTPS_PAGE, 5, env=DESKTOP_ENV)
     fake = jobs.crawl_job._process
@@ -285,7 +274,7 @@ def test_stop_does_not_kill_a_crawl_that_exits_within_the_grace_period(monkeypat
     jobs.crawl_job.start(HTTPS_PAGE, 5, env=DESKTOP_ENV)
     fake = jobs.crawl_job._process
     jobs.crawl_job.stop()
-    fake.finish(0)  # honoured SIGTERM and wrapped up
+    fake.finish(0)
     time.sleep(0.7)
     assert fake.killed is False
 
@@ -311,9 +300,6 @@ def test_lock_busy_from_output_is_surfaced(client: TestClient):
     fake.finish(1)
     page = client.get("/crawl")
     assert "holds the profile lock" in page.text
-
-
-# -- v3: the comments option reaches the subprocess argv --------------------
 
 
 def test_comments_are_appended_to_the_argv_only_when_asked_for():

@@ -5,24 +5,14 @@
   <h1>Crawl</h1>
 </div>
 
-{# Announced to a screen reader, twice per crawl. This element is outside
-   #crawl-panel and is updated by an out-of-band :innerHTML swap, so the
-   live region itself is never replaced -- which is what makes the
-   announcement work. It deliberately carries no elapsed-second count: the
-   old aria-live paragraph was rewritten every two seconds, so a reader
-   heard the timer tick for the whole crawl. #}
+{# Only the innerHTML is swapped, so the live region itself survives -- that is what makes the announcement work. No second count: a reader would hear it tick. #}
 <p id="crawl-announce" class="visually-hidden" aria-live="polite">
   {%- if status.running %}Crawl running.
   {%- elif status.exit_code is not none %}Crawl finished with exit code {{ status.exit_code }}.
   {%- endif %}
 </p>
 
-{# Everything that changes while a crawl runs. The poll attributes are
-   inside an {% if %}: when the crawl ends, the response's #crawl-panel is
-   the idle start form, which carries no hx-trigger -- so htmx stops
-   polling because the element that was polling no longer exists. That is
-   the whole termination mechanism (plans/v4/00 D4). hx-disinherit keeps a
-   future hx-post on the Stop form from inheriting the poll's target. #}
+{# The poll attributes sit inside the if: once the crawl ends the swapped-in panel carries no hx-trigger, which is the only thing that stops the polling. #}
 <div id="crawl-panel"
      hx-disinherit="hx-target hx-swap hx-select hx-select-oob"
      {%- if status.running %}
@@ -55,9 +45,7 @@
 {% if status.running %}
 <section class="panel">
   <h2>Crawl running</h2>
-  {# No aria-live here: #crawl-announce above owns that, so the ticking
-     second count is shown but not read out. The whole paragraph is
-     re-rendered by the poll, so nothing needs its own element any more. #}
+  {# No aria-live here: #crawl-announce owns it, so the ticking count is shown but never read out. #}
   <p>
     Running <span class="mono">{{ status.page_url }}</span>
     <span>for {{ (status.elapsed_seconds or 0) | round | int }}s…</span>
@@ -76,9 +64,7 @@
   </form>
 </section>
 {% else %}
-{# x-data sits on the form, not on a wrapper around the two number
-   inputs: .filter-bar is a flex container whose labels are its flex
-   items, so a wrapper would change the layout. #}
+{# x-data on the form itself: .filter-bar is a flex container whose labels are its flex items, so a wrapper would change the layout. #}
 <form class="filter-bar" method="post" action="/crawl"
       x-data="crawlCost" x-on:input="recalc">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -120,14 +106,7 @@
 {% endif %}
 </div>
 
-{# Outside #crawl-panel on purpose. The poll replaces only this element's
-   innerHTML (the :innerHTML strategy on hx-select-oob above), so the <pre>
-   itself is never recreated and the browser keeps its scroll position for
-   free. Recreating it would reset scrollTop to 0 every two seconds. #}
-{# Rendered whenever a crawl is running or has finished -- NOT gated on
-   status.lines. An out-of-band swap can only replace an element that
-   already exists, so if this were absent for the first seconds of a crawl
-   the log would stay empty until the next full page load. #}
+{# Outside #crawl-panel: only its innerHTML is swapped, so the <pre> keeps its scroll position. Not gated on status.lines -- an OOB swap needs an existing element. #}
 {% if status.running or status.exit_code is not none %}
 <pre class="source-view" id="crawl-output">{% for line in status.lines %}{{ line }}
 {% endfor %}</pre>

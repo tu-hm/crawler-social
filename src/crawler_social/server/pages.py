@@ -28,18 +28,12 @@ templates = create_templates()
 
 PAGE_SIZES = (25, 50, 100, 200)
 DEFAULT_PAGE_SIZE = 50
-#: Source views stop at 2 MB so one huge snapshot cannot hang the browser.
-#: A run still marked "running" after this long is shown as stale.
 STALE_RUN_AFTER = timedelta(hours=1)
-#: The newest post being older than this usually means the parser broke.
 FRESH_WINDOW = timedelta(days=7)
-#: Chart span for the home page.
 CHART_DAYS = 30
-#: Default and ceiling for the "new posts" limit on the /crawl form.
 DEFAULT_CRAWL_LIMIT = 20
 MAX_CRAWL_LIMIT = 500
-#: Ceiling on comments per post asked for from the UI; each one costs a
-#: permalink navigation, so the form cannot ask for an unbounded number.
+#: Ceiling on comments per post: each one costs a permalink navigation.
 MAX_CRAWL_COMMENTS = 100
 
 
@@ -233,7 +227,7 @@ def posts_list(request: Request):
             try:
                 normalized = normalize_when(raw, end_of_day=end_of_day)
             except ValueError:
-                continue  # a bad date drops the filter instead of erroring
+                continue
             if name == "since":
                 since, since_input = normalized, raw
             else:
@@ -341,7 +335,6 @@ def _no_database_page(request: Request, template: str, nav: str, **extra: Any):
     return render(request, template, context)
 
 
-#: Comments shown inline on a post page; the API serves the rest.
 COMMENTS_ON_POST_PAGE = 50
 
 
@@ -474,7 +467,6 @@ def home(request: Request):
     try:
         conn = queries.connect_ro(config.db_path)
     except DatabaseMissingError:
-        # The home page is the one place that must always render.
         context = base_context(request)
         context.update(
             db_present=False,
@@ -523,7 +515,6 @@ def home(request: Request):
         empty=summary["total_posts"] == 0,
         empty_message="No posts stored yet.",
         empty_command="uv run crawler crawl <page-url>",
-        # Health panel
         posts_24h=posts_24h,
         posts_7d=posts_7d,
         last_run_age=relative_age(summary["last_run"]["started_at"])
@@ -707,9 +698,7 @@ def _crawl_context(request: Request, **extra: Any) -> dict[str, Any]:
     conn = _open_readonly(request)
     known_pages: list[dict] = []
     last_run = None
-    # The chrome counts come from the same connection: building them
-    # without one printed "0 posts / 0 snapshots / 0 runs" in the footer
-    # of a populated database.
+    # base_context needs this connection or the footer counts render as zeros.
     context = base_context(request, conn)
     if conn is not None:
         try:
@@ -756,8 +745,6 @@ async def crawl_start(request: Request):
         comments = int(str(form.get("comments") or 0))
     except ValueError:
         comments = 0
-    # Clamped here, not just in the CLI: this value becomes an argv entry and
-    # a per-post permalink navigation.
     comments = max(0, min(comments, MAX_CRAWL_COMMENTS))
     page_url = str(form.get("page_url") or "").strip()
     try:
@@ -765,14 +752,9 @@ async def crawl_start(request: Request):
             page_url,
             limit,
             comments=comments,
-            # Without this the configured ceiling on permalink visits was
-            # silently dropped for UI-started crawls and the CLI default
-            # applied instead.
             comments_max_posts=config.comments_max_posts if comments else None,
         )
     except JobRefused as exc:
-        # 409, not 200: nothing was started, and a refusal is not a
-        # successful page view for a client or a cache to treat as one.
         return render(
             request,
             "crawl.html",

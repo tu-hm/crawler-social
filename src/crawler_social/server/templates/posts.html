@@ -6,14 +6,7 @@
   {% if csv_url %}<a class="button" id="csv-link" href="{{ csv_url }}">Download CSV</a>{% endif %}
 </div>
 
-{# htmx re-requests this same route and swaps #results out of the full
-   response, so there is no partial template and no HX-Request branch --
-   see plans/v4/00 D1. The trigger list mirrors exactly what app.js used to
-   do: change on selects and dates, a 500ms debounce on the search box.
-   Explicit `from:` sources because a <select> fires `input` as well as
-   `change`, and a bare `input` trigger would fire twice per selection.
-   `submit` is listed because overriding hx-trigger drops a form's natural
-   submit trigger. The method/action stay: with htmx absent this submits. #}
+{# Explicit `from:` sources because a <select> fires `input` as well as `change`; `submit` is listed because hx-trigger replaces a form's own submit. #}
 <form class="filter-bar" method="get" action="/posts"
       hx-get="/posts"
       hx-trigger="submit,
@@ -43,9 +36,7 @@
   {% if has_filters %}<a class="button" href="{{ clear_url }}">Clear</a>{% endif %}
 </form>
 
-{# Everything htmx swaps. The chips belong inside: typing in the search
-   box has to make a chip appear. The form stays outside -- swapping a form
-   mid-keystroke would destroy the caret. #}
+{# Everything htmx swaps. The form stays outside: swapping it mid-keystroke would destroy the caret. #}
 <div id="results">
 {% if chips %}
 <div class="active-filters" aria-label="Active filters">

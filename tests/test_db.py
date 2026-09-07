@@ -1,4 +1,4 @@
-"""Required tests from plans/v1/02-storage.md."""
+"""Tests for the storage layer."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def conn(tmp_path: Path):
 def test_schema_applied_twice_is_safe(tmp_path: Path):
     path = tmp_path / "social.db"
     db.connect(path).close()
-    db.connect(path).close()  # must not raise
+    db.connect(path).close()
     with sqlite3.connect(path) as c:
         names = {
             r[0]
@@ -94,10 +94,7 @@ def test_list_posts_contains_is_parameterized(conn):
     assert [r[0] for r in rows] == ["p1"]
 
 
-# -- v3: comments and the additive column migration -------------------------
-
-#: The v2 schema, verbatim in the shape a database written before v3 has:
-#: `posts` with no post_url, and no `comments` table at all.
+#: v2: `posts` with no post_url, and no `comments` table at all.
 V2_SCHEMA = """
 CREATE TABLE posts (
     post_id      TEXT PRIMARY KEY,
@@ -124,7 +121,6 @@ def test_connect_migrates_an_old_database_in_place(tmp_path: Path):
     try:
         columns = {r[1] for r in conn.execute("PRAGMA table_info(posts)")}
         assert "post_url" in columns
-        # The existing row survives the migration untouched.
         assert conn.execute("SELECT post_id, post_url FROM posts").fetchone() == (
             "p1",
             None,
@@ -170,7 +166,7 @@ def test_a_comment_rank_is_overwritten_but_first_seen_is_not(conn):
     rank, first_seen, last_seen, likes = conn.execute(
         "SELECT rank_index, first_seen, last_seen, like_count FROM comments"
     ).fetchone()
-    # Ranking is Facebook's, and it changes; the row records the latest one.
+    # Facebook's ranking changes; the row records the latest one.
     assert rank == 1
     assert likes == 9
     assert first_seen == "2026-01-01T00:00:00+00:00"

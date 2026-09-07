@@ -96,9 +96,8 @@ def test_blocked_run_holds_the_watermark(tmp_path):
     summary = run(config, capture_then_block([page_html("1", "2")], LOGIN_WALL_HTML))
     assert summary.blocked == wall.LOGIN_WALL
     conn = db.connect(config.db_path)
-    # Posts seen before the wall are kept...
     assert conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0] == 2
-    # ...but the feed was truncated, so state must not advance past them.
+    # The feed was truncated, so state must not advance past the kept posts.
     assert db.get_state(conn, PAGE_URL) is None
     conn.close()
 

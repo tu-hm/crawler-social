@@ -1,4 +1,4 @@
-"""Required tests from plans/v2/06-post-detail-and-snapshots.md."""
+"""Tests for the post detail and snapshot views."""
 
 from __future__ import annotations
 
@@ -11,8 +11,7 @@ from tests.conftest import make_config, make_db
 
 FIXTURE = Path(__file__).parent / "fixtures" / "facebook_page_sample.html"
 PAGE_URL = "https://www.facebook.com/ExamplePublicPage"
-# The bytes a capture returns. They are hashed and measured on the way in,
-# never stored, so this only ever reaches the database as a size.
+# Hashed and measured on the way in, never stored: the db keeps only a size.
 RAW_SNAPSHOT = (
     b'<html lang="xx-zz"><script>track("x")</script>'
     b'<body class="captured">' + FIXTURE.read_bytes() + b"</body></html>"
@@ -49,7 +48,7 @@ def test_post_detail_renders_every_field_and_full_text(client: TestClient):
         assert label in resp.text
     assert "hello world" in resp.text
     assert "2026-02-04T11:00:00+00:00" in resp.text
-    assert "ago)" in resp.text  # relative age beside the seen timestamps
+    assert "ago)" in resp.text
     assert 'data-copy-target="#post-text"' in resp.text
 
 
@@ -79,8 +78,7 @@ def test_snapshots_list_filters(client: TestClient):
     assert client.get("/snapshots", params={"run_id": 1}).status_code == 200
     empty = client.get("/snapshots", params={"run_id": 999})
     assert empty.status_code == 200
-    # The wording now distinguishes "filtered to nothing" from
-    # "nothing stored at all", which used to read the same.
+    # "Filtered to nothing" and "nothing stored at all" used to read the same.
     assert "No snapshots match these filters." in empty.text
     assert "Clear filters" in empty.text
 
@@ -90,8 +88,7 @@ def test_snapshot_detail_shows_the_capture_record(client: TestClient):
     assert resp.status_code == 200
     assert "Captured size" in resp.text
     assert "SHA-256" in resp.text
-    # Nothing renders captured markup any more, so there is no iframe to
-    # sandbox and no raw route to point one at.
+    # Nothing renders captured markup, so there is no iframe and no raw route.
     assert "<iframe" not in resp.text
     assert "/api/snapshots/1/raw" not in resp.text
 

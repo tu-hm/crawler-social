@@ -3,8 +3,8 @@
 **Transport:** headful Chrome, driving your own logged-in session.
 **ToS class:** `prohibited` — automated collection is against Meta's Terms even for
 content your account can already see. The currency of failure is your account, not a
-lawsuit. See [../../PLAN.md](../../PLAN.md) §3.
-**Ships:** first. See [../../PLAN.md](../../PLAN.md) §6 M2–M10.
+lawsuit.
+**Ships:** first.
 
 Facebook is the only source in this project where browser automation is the right answer,
 and it is worth being precise about *why*, because the reason does not generalize:
@@ -13,8 +13,8 @@ to see.** Reddit has a better API. Telegram has a far better one. Zalo Web encry
 own request params with a per-session key, so a driver there gets nothing a scraper can
 use. Facebook clears the bar that the others fail or exceed.
 
-Everything in this document assumes the contract in [../../ARCHITECTURE.md](../../ARCHITECTURE.md)
-and the schema in [../DATA-MODEL.md](../DATA-MODEL.md).
+Everything in this document assumes the connector contract and the schema in
+[../DATA-MODEL.md](../DATA-MODEL.md).
 
 > **A sourcing note that applies to this entire document.** The research rule for this
 > project forbade any request to `facebook.com`. Every DOM selector, GraphQL operation
@@ -57,7 +57,7 @@ Deliberately **not** set, and each absence is load-bearing:
 | `PARALLEL_TARGETS` | One browser, strictly serial, deliberately slow |
 | `BILLED` | Costs time and account risk, not money |
 | `CONVERSATIONS` | Messenger is out of scope at v1. If it is ever added, this flag flips and everything in [../GOVERNANCE.md](../GOVERNANCE.md) engages |
-| `FILE_IMPORT` | No archive importer at v1. The Facebook data-export ZIP is a plausible future `FILE_IMPORT` target and would reuse the shape M14 builds for X. *(`Cap.PUSH` is not in this list because it does not exist — see ARCHITECTURE.md §6.)* |
+| `FILE_IMPORT` | No archive importer at v1. The Facebook data-export ZIP is a plausible future `FILE_IMPORT` target and would reuse the shape M14 builds for X. *(`Cap.PUSH` is not in this list because it does not exist.)* |
 
 ### `capabilities_note()`
 
@@ -379,8 +379,7 @@ users are never internally contradictory. This is the reason §2 rejects `m.face
 
 **Headless: no. Always headful.** Headless is the single loudest signal available, and a
 warm logged-in session is far too valuable to spend on the convenience. This constrains
-scheduling to a GUI session, which is why the tool uses a LaunchAgent rather than `cron`
-(see [../../PLAN.md](../../PLAN.md) §7).
+scheduling to a GUI session, which is why the tool uses a LaunchAgent rather than `cron`.
 
 **Driver: SeleniumBase UC Mode**, with all construction behind one module so swapping is a
 one-file change. *(Verified from PyPI, 2026-09-01: `selenium` 4.48.0, released 2026-08-27,
@@ -718,7 +717,7 @@ This makes `is_pinned` detection load-bearing rather than cosmetic. If a DOM rot
 breaks the pinned badge selector, the failure is not a missing column — it is a crawler
 that silently stops collecting. **The canary must therefore track `is_pinned` fill rate
 specifically** — and that is only possible because `is_pinned` is **tri-state** in
-`ItemDraft` (`bool | None`, ARCHITECTURE §5). On a `bool = False` default its fill rate is
+`ItemDraft` (`bool | None`). On a `bool = False` default its fill rate is
 structurally 100% and the alarm can never sound, which would have made the canary's own
 headline justification the one field it could not watch. Core's SUSPECT rule (c) — a
 watermark stop at scroll ≤ 2 with zero new items — is the second, fill-rate-independent
@@ -828,7 +827,7 @@ cries wolf is a canary you disable.
    re-populate every affected row back to the beginning. **This is the entire reason the
    project is raw-first**, and it is worth rehearsing once at M6 before you need it under
    pressure. `projection A/B diffing` — rebuild into a shadow table, diff per-field fill
-   rates, then promote or discard — is deferred in [../../PLAN.md](../../PLAN.md) §11 with the second parser
+   rates, then promote or discard — is deferred with the second parser
    rewrite as its trigger, at which point it converts the canary from an alarm that fires
    three weeks late into a pre-flight check on your own fix.
 
@@ -869,6 +868,4 @@ by analogy with Facebook.
 | Whether `mbasic` retains any residual function | Retired December 2024. Treat as gone | Not worth checking |
 | **Profile is warm enough to drive** | Not a fact — a policy, enforced. `crawler doctor` reports profile age from the user-data-dir mtime; `crawl` refuses below the threshold | **≥ 3 days** before M2 (a Page); **≥ 14 days** before M5 (a group). The clock starts at M0/P0 |
 
-Every row above is also in the consolidated checklist,
-[../../PLAN.md](../../PLAN.md) §12 — that is the list to work from; this one carries the
-Facebook-specific consequence of each answer.
+Every row above carries the Facebook-specific consequence of each answer.

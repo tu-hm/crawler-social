@@ -40,7 +40,7 @@ def validate_remote_bind(
     """Why a non-loopback bind may not start, or None if it may.
 
     Both guards must pass, and the refusal names the missing one so the
-    operator is never left guessing (plans/v2/09).
+    operator is never left guessing.
     """
     if is_loopback_host(host):
         return None
@@ -71,7 +71,6 @@ class DatabaseUnavailable(Exception):
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # Nothing to open at startup: connections are per-request on purpose.
     yield
 
 
@@ -112,16 +111,13 @@ def create_app(config: Config) -> FastAPI:
     app = FastAPI(
         title="crawler-social",
         version=__version__,
-        # The viewer is a local tool; exposing an interactive docs surface
-        # (and an OpenAPI schema that lists every route) is not worth it,
-        # especially on a non-loopback bind.
+        # No docs or schema: they would list every route on a remote bind.
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
         lifespan=_lifespan,
     )
     app.state.config = config
-    # One CSRF token per server start: forms embed it, POSTs require it.
     app.state.csrf_token = secrets.token_urlsafe(32)
 
     from fastapi.staticfiles import StaticFiles
@@ -143,9 +139,7 @@ def create_app(config: Config) -> FastAPI:
     )
     from .templating import STATIC_DIR
 
-    # Before include_router: FastAPI wraps an included router in one
-    # opaque object, so the routes have to be adjusted while they are
-    # still reachable on the router itself.
+    # Before include_router: FastAPI then wraps these routes in one object.
     _allow_head(api_router.routes)
     app.include_router(api_router)
     app.mount(
@@ -167,8 +161,6 @@ def create_app(config: Config) -> FastAPI:
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_error(request: Request, exc: StarletteHTTPException):
-        # JSON error shape under /api, a rendered page everywhere else --
-        # decided by path prefix, not the Accept header.
         if wants_json(request):
             return JSONResponse(
                 status_code=exc.status_code,
@@ -197,8 +189,6 @@ def create_app(config: Config) -> FastAPI:
 
     @app.exception_handler(Exception)
     async def _internal_error(request: Request, exc: Exception):
-        # Full traceback, path and request id go to the server log; the
-        # client gets an opaque body plus only that id to quote (plans/v2/09).
         request_id = getattr(request.state, "request_id", None) or secrets.token_hex(8)
         sys.stderr.write(
             f"request {request_id} failed: {request.method} {request.url.path}\n"
@@ -236,8 +226,7 @@ def create_app(config: Config) -> FastAPI:
 
     _allow_head(app.routes)
 
-    # Installed last so the middleware stack wraps every route above,
-    # including /healthz.
+    # Installed last so the middleware wraps every route above, /healthz too.
     install_hardening(app, token=config.serve_token)
 
     return app

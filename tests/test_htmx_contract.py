@@ -1,4 +1,4 @@
-"""The client-side contract for the vendored libraries (plans/v4/04).
+"""The client-side contract for the vendored libraries.
 
 Five properties of the markup that nothing else can prove, because each one
 fails silently in a browser rather than in a request:
@@ -32,13 +32,10 @@ from tests.conftest import make_config, make_db
 PAGE_URL = "https://a.example"
 VENDOR_DIR = STATIC_DIR / "vendor"
 
-# A long error so the /runs disclosure component renders; a post with text so
-# the copy button does.
+# Long enough that the /runs disclosure component renders.
 LONG_ERROR = "boom: " + "captcha wall detail " * 12
 
-#: `?limit=1&offset=1` is not decoration: with a short result set both
-#: pagination links render as disabled <span>s carrying no attributes, so a
-#: page-1 render never exercises partials/pagination.html at all.
+#: The ?limit=1&offset=1 entries exist so partials/pagination.html is exercised.
 HTML_ROUTES = [
     "/",
     "/posts",
@@ -123,11 +120,7 @@ def _rendered(client: TestClient) -> dict[str, str]:
     return pages
 
 
-# --- 1. Nothing may require unsafe-eval, and nothing may be inline style ---
-
-#: Each pattern maps to the reason it is banned, which becomes the failure
-#: message. Anything in the right-hand column of the table in
-#: plans/v4/03-alpine-components.md belongs here.
+#: Values are failure messages.
 BANNED = {
     r"\bhx-on:": "hx-on: is evaluated with the Function constructor, which "
                  "script-src 'self' forbids and allowEval:false disables",
@@ -162,9 +155,6 @@ def test_no_banned_attribute_in_any_template(pattern: str, reason: str) -> None:
     assert not hits, reason + "\n" + "\n".join(hits)
 
 
-# --- 2. Alpine components are registered ------------------------------------
-
-
 def test_every_x_data_names_a_registered_component() -> None:
     app_js = (STATIC_DIR / "app.js").read_text()
     registered = set(re.findall(r"Alpine\.data\(\s*[\"']([\w$]+)[\"']", app_js))
@@ -181,20 +171,15 @@ def test_every_x_data_names_a_registered_component() -> None:
 
 
 def test_x_cloak_has_a_css_rule() -> None:
-    # Without it, every element that exists only to show an Alpine state is
-    # visible as a dead control to a reader with JavaScript off.
     assert "[x-cloak]" in (STATIC_DIR / "app.css").read_text(), (
         "app.css needs an [x-cloak] { display: none !important } rule"
     )
 
 
 def test_htmx_indicator_rules_are_hand_written() -> None:
-    # includeIndicatorStyles:false means htmx no longer injects these, so
-    # nothing else guards their existence.
+    # includeIndicatorStyles:false means htmx no longer injects these.
     assert ".htmx-indicator" in (STATIC_DIR / "app.css").read_text()
 
-
-# --- 3. Swap targets resolve -------------------------------------------------
 
 ID_ATTRS = ("hx-target", "hx-select")
 
@@ -259,8 +244,8 @@ def test_swaps_re_request_their_own_route(client: TestClient) -> None:
             assert route == path.split("?")[0] or route in HTML_ROUTES, (
                 f"{path}: hx-get points at {route!r}, which is neither this "
                 "route nor another page route. If that is deliberate, a "
-                "partial endpoint was introduced and plans/v4/00 D1 no "
-                "longer holds."
+                "partial endpoint was introduced and the rule that a route has "
+                "exactly one response no longer holds."
             )
 
 
@@ -281,8 +266,6 @@ def test_crawl_output_and_announce_sit_outside_the_polled_panel(
             "out-of-band swap would fight over it"
         )
 
-
-# --- 4. Progressive enhancement ---------------------------------------------
 
 ELEMENT_WITH_HX_GET = re.compile(r"<(\w+)\b([^>]*\bhx-get=\"[^\"]+\"[^>]*)>", re.S)
 
@@ -315,7 +298,6 @@ def test_every_hx_get_element_works_without_javascript(client: TestClient) -> No
 
 
 def test_page_size_form_keeps_its_noscript_button(client: TestClient) -> None:
-    # The only control on /posts with no other no-JS path.
     assert "<noscript>" in client.get("/posts").text
 
 
@@ -324,8 +306,6 @@ def test_filter_forms_still_submit_natively(client: TestClient) -> None:
         html = client.get(path).text
         assert f'method="get" action="{action}"' in html
 
-
-# --- 5. Configuration and vendored bytes ------------------------------------
 
 REQUIRED_CONFIG = {
     "includeIndicatorStyles": False,
@@ -371,8 +351,7 @@ def test_vendored_files_match_their_checksums() -> None:
 
 
 def test_vendored_alpine_is_the_csp_build() -> None:
-    # NOT a `Function(` assertion: that string appears identically in the
-    # stock build, so such a test passes while every attribute is broken.
+    # Not a `Function(` check: that string appears in the stock build too.
     source = (VENDOR_DIR / "alpine-csp.min.js").read_text()
     assert "CSP-friendly build" in source, (
         "alpine-csp.min.js is stock Alpine, not @alpinejs/csp. Stock Alpine "
@@ -389,14 +368,9 @@ def test_vendored_files_are_served(client: TestClient) -> None:
 
 
 def test_no_external_url_in_any_rendered_page(client: TestClient) -> None:
-    # The viewer must work with no network. The two vendored <script src>
-    # values are root-relative, so this keeps holding.
     for path, html in _rendered(client).items():
         for attr in re.findall(r'(?:src|href)="([^"]+)"', html):
             assert not attr.startswith(("http://", "https://")), f"{path}: {attr}"
-
-
-# --- 6. The /crawl poll terminates by swapping itself away ------------------
 
 
 def test_crawl_panel_polls_while_running(running_client: TestClient) -> None:
@@ -407,7 +381,7 @@ def test_crawl_panel_polls_while_running(running_client: TestClient) -> None:
 
 
 def test_crawl_panel_stops_polling_when_idle(client: TestClient) -> None:
-    """The termination guarantee (plans/v4/00 D4).
+    """The termination guarantee.
 
     The idle panel must carry no trigger: htmx stops polling because the
     element that was polling no longer exists after the swap. Without this
@@ -447,9 +421,6 @@ def test_running_panel_has_no_second_live_region(running_client: TestClient) -> 
     )
 
 
-# --- 7. There is exactly one rendering path (D1) -----------------------------
-
-
 def test_hx_request_header_changes_nothing(client: TestClient) -> None:
     """No handler may branch on HX-Request.
 
@@ -462,7 +433,8 @@ def test_hx_request_header_changes_nothing(client: TestClient) -> None:
         assert boosted.status_code == plain.status_code, path
         assert boosted.text == plain.text, (
             f"{path} renders differently for an htmx request -- a partial "
-            "path was introduced and plans/v4/00 D1 no longer holds"
+            "path was introduced and the rule that a route has exactly one "
+            "response no longer holds"
         )
 
 

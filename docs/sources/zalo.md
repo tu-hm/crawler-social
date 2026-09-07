@@ -52,8 +52,6 @@ whether backfill exists at all, whose data it is, and legal posture. A mode flag
 those differences into runtime branches and would invite daily-routine code to assume backfill
 exists when for two of the three it does not.
 
-Registry mechanics are in [../../ARCHITECTURE.md](../../ARCHITECTURE.md).
-
 ```python
 REGISTRY = {
     ...
@@ -638,11 +636,10 @@ first-party. Listed here so the user can re-check without repeating the search.
 **This section is the most important one in the document.** Zalo's documentation quality is
 poor enough that acting on an unchecked claim is a real risk.
 
-It stays here in full rather than folding into the project-wide checklist, because Zalo's
-unknowns outnumber every other source's combined. [../../PLAN.md](../../PLAN.md) §12 §E
-carries the three worth doing **even while Zalo is deferred** — Z1 (is the Zalo PC export
-`.zip` readable?), Z2 (can an individual complete Bot Platform signup?) and Z3 (does OA
-verification accept a *hộ kinh doanh*?) — and points back here for the rest.
+It stays here in full rather than folding into a project-wide checklist, because Zalo's
+unknowns outnumber every other source's combined. Three are worth doing **even while Zalo is
+deferred** — Z1 (is the Zalo PC export `.zip` readable?), Z2 (can an individual complete Bot
+Platform signup?) and Z3 (does OA verification accept a *hộ kinh doanh*?).
 
 | # | Claim | Status | How to settle it |
 |---|---|---|---|

@@ -241,7 +241,7 @@ dishonest.**
 | # | Requirement | Enforcement |
 |---|---|---|
 | 1 | **FileVault is a checked prerequisite, not advice** | `crawler doctor` shells `fdesetup status`. `crawler targets add` **refuses** to enrol a `conversation` target when it is off |
-| 2 | For `broadcast` and `joined`, FileVault **is** the whole answer | no further encryption; keeps `sqlite3 data/social.db ".schema"` and every ad-hoc query in PLAN.md §9 working |
+| 2 | For `broadcast` and `joined`, FileVault **is** the whole answer | no further encryption; keeps `sqlite3 data/social.db ".schema"` and every ad-hoc query against it working |
 | 3 | `private.db` is **SQLCipher**, key from the macOS Keychain | `sqlcipher3` **0.6.2** (2026-01-07). `PRAGMA key` is the **first** statement on the connection |
 | 4 | `PRAGMA secure_delete = ON` **at creation** | persistent header flag; setting it later does **not** retroactively zero already-freed pages |
 | 5 | `PRAGMA cipher_memory_security = ON` | |
@@ -339,9 +339,8 @@ So, three changes, and all three are enforced rather than advised:
    flag is set the sweep runs, prints exactly what it *would* delete, and deletes nothing —
    the same dry-run-first posture `purge` already has. It made no sense that the *less*
    destructive verb was the one defaulting to `--dry-run`.
-3. **The numbers are surfaced where a user will actually meet them** — in
-   [../PLAN.md](../PLAN.md) §2 (Scope) and again as a frozen answer with its cost in PLAN §13
-   — rather than only here, in the document nobody reads first.
+3. **The numbers are surfaced where a user will actually meet them** — rather than only
+   here, in the document nobody reads first.
 
 **Forward-only enrolment and retention are different controls and you need both answers.**
 Forward-only (§9.1) bounds **what enters**. Retention bounds **what stays**. "I'll decide
@@ -357,8 +356,7 @@ backfill later" is genuinely fine, because later is not lossy for anything after
 
 ### 7.1 The command surface
 
-Flags and exit codes are normative in [../ARCHITECTURE.md](../ARCHITECTURE.md) §11; this is
-what the verbs *do*.
+Flags and exit codes are defined by the CLI itself; this is what the verbs *do*.
 
 ```
 crawler purge                                   # --dry-run is the DEFAULT; prints a plan
@@ -535,8 +533,7 @@ arrival.
 **Decision: `rescan_window_days = 0` for Facebook, and `rescan_once_per_day` is deleted.**
 Facebook upstream deletes are simply not detected. That is a permanent property of an opaque
 transport, not a gap to close, and it is stated in
-[./sources/facebook.md](./sources/facebook.md) §9 and [../PLAN.md](../PLAN.md) §10 rather than
-implied. [./sources/x.md](./sources/x.md) §3.8 reaches the same conclusion for the same class
+[./sources/facebook.md](./sources/facebook.md) §9 rather than implied. [./sources/x.md](./sources/x.md) §3.8 reaches the same conclusion for the same class
 of reason and says so out loud; this now matches.
 
 **The absence sweep therefore arrives with Telegram**, which is the first connector whose
@@ -597,8 +594,8 @@ An earlier draft bought the checkpoint with two empty tables — `persons` and
 `'inferred'` value, so automated matching could not be added without a migration. The
 reasoning was right and the mechanism was expensive: two tables, a composite foreign key and
 a `CHECK`, with **zero declared writers**, to buy a tripwire that a written rule buys for
-free. The rule now lives in [./DECISIONS.md](./DECISIONS.md) ADR-0023 and the deferred row
-with its trigger is in [../PLAN.md](../PLAN.md) §11.
+free. The rule now lives in [./DECISIONS.md](./DECISIONS.md) ADR-0023, which also carries
+the deferral and its trigger.
 
 The underlying reason is correctness, not caution: Vietnamese given-name distributions are
 concentrated enough that name-based cross-platform matching is near a coin flip, and a wrong
@@ -738,7 +735,6 @@ not a criminal statute: the realistic consequence is account enforcement — che
 block, disablement — not prosecution. *hiQ v. LinkedIn* (9th Cir.) held that scraping genuinely
 public data is not CFAA "unauthorized access", but that is US law, says nothing about breach of
 contract, and does not reach content behind a login — which is exactly what a private group is.
-PLAN.md §3 already states this correctly and its risk statement is kept verbatim.
 
 **Reddit — the only officially clean path, with retention strings attached.** Official Data
 API, official OAuth, published terms. Two things reshape this document. First, self-service app
@@ -874,7 +870,7 @@ governance:
   store_rosters: false              # not configurable
   first_crawl_since_days: 90        # broadcast + joined; conversation is enrolled_at
   # Keychain service names are RUNTIME IDENTIFIERS. One convention, reverse-DNS,
-  # matching the LaunchAgent label -- see ARCHITECTURE.md §12.
+  # matching the LaunchAgent label.
   pepper_keychain_service:     vn.moonbase.crawler-social.pepper
   private_db_keychain_service: vn.moonbase.crawler-social.private-db
 
@@ -951,9 +947,9 @@ governance:
       min_privacy: conversation
 ```
 
-**Command surface this layer adds.** Spellings, flags and exit codes are normative in
-[../ARCHITECTURE.md](../ARCHITECTURE.md) §11 — this list names the subset that exists *for*
-governance and does not define any of it.
+**Command surface this layer adds.** Spellings, flags and exit codes are defined by the CLI
+itself — this list names the subset that exists *for* governance and does not define any of
+it.
 
 ```
 crawler init-keys                          # generate the private.db key + the pepper, once
@@ -977,20 +973,15 @@ off.
 
 ## 17. Verify before building
 
-**The consolidated checklist is [../PLAN.md](../PLAN.md) §12** — every unverified claim in
-every document, with how to check it, how long it takes and what it blocks. Working from one
-list is the point: four overlapping lists is how "every X price figure is third-party
-reporting" survived here for a week after `docs.x.com` had been fetched twice.
+The four rows below are the claims whose *governance* consequence needs stating next to the
+policy they affect.
 
-The four rows below are the ones whose *governance* consequence needs stating next to the
-policy they affect. Their status and their check live in PLAN §12.
-
-| Claim | PLAN §12 row | Governance consequence if it goes the other way |
-|---|---|---|
-| FTS5 in the vendored SQLCipher build | **B1** | **Not "nothing else changes."** Without FTS5 the statement list cannot be applied to `private.db` at all, which breaks the identical-DDL invariant. The fork is written out in [./DATA-MODEL.md](./DATA-MODEL.md) §14 item 1: same DDL minus the five FTS objects, the divergence recorded in `schema_versions` as a **declared state**, and `crawler search --private` degrading to a `LIKE` scan. Conversations stay searchable either way, which is the flaw ADR-0024 rejected |
-| Keychain ACLs (`security -T <binary>`) restricting a `uv run python` caller | **C25** | If they do not hold, the unattended-read convenience the LaunchAgent depends on is a **real weakening** and §5.4 must say so in those words. Do not imply protection you have not tested |
-| Reddit's deletion obligation — the "48 hours" figure and the "even if disassociated, de-identified or anonymized" clause | **D2** | Read it first-hand **before** fixing Reddit's retention default in code. Ship `on_upstream_delete='follow'` locked regardless: it is the conservative default and costs nothing if the wording turns out milder |
-| Whether Vietnam's PDPL carries a purely-personal / household exemption | **D7** | **The design does not rely on it**, and that is deliberate — the tool stores third parties' messages either way, so the class model, forward-only enrolment, the purge path and export gating are the right controls with or without the exemption |
+| Claim | Governance consequence if it goes the other way |
+|---|---|
+| FTS5 in the vendored SQLCipher build | **Not "nothing else changes."** Without FTS5 the statement list cannot be applied to `private.db` at all, which breaks the identical-DDL invariant. The fork is written out in [./DATA-MODEL.md](./DATA-MODEL.md) §14 item 1: same DDL minus the five FTS objects, the divergence recorded in `schema_versions` as a **declared state**, and `crawler search --private` degrading to a `LIKE` scan. Conversations stay searchable either way, which is the flaw ADR-0024 rejected |
+| Keychain ACLs (`security -T <binary>`) restricting a `uv run python` caller | If they do not hold, the unattended-read convenience the LaunchAgent depends on is a **real weakening** and §5.4 must say so in those words. Do not imply protection you have not tested |
+| Reddit's deletion obligation — the "48 hours" figure and the "even if disassociated, de-identified or anonymized" clause | Read it first-hand **before** fixing Reddit's retention default in code. Ship `on_upstream_delete='follow'` locked regardless: it is the conservative default and costs nothing if the wording turns out milder |
+| Whether Vietnam's PDPL carries a purely-personal / household exemption | **The design does not rely on it**, and that is deliberate — the tool stores third parties' messages either way, so the class model, forward-only enrolment, the purge path and export gating are the right controls with or without the exemption |
 
 **The X pricing row is closed.** `docs.x.com` was fetched on 2026-09-01 by two independent
 recon passes that agree on every figure (§13). What remains is not verification but
@@ -1000,8 +991,6 @@ true`, and keep the cap typed in dollars.
 ---
 
 *Companion documents: [../README.md](../README.md) (what this repo is and the reading order) ·
-[../PLAN.md](../PLAN.md) (scope, milestones, the deferred list, the verify checklist, the open
-questions) · [../ARCHITECTURE.md](../ARCHITECTURE.md) (the connector contract and the CLI
-surface) · [./DATA-MODEL.md](./DATA-MODEL.md) (the frozen DDL — the only copy) ·
+[./DATA-MODEL.md](./DATA-MODEL.md) (the frozen DDL — the only copy) ·
 [./DECISIONS.md](./DECISIONS.md) (why each of these is frozen) · [./sources/](./sources/)
 (per-connector evidence).*

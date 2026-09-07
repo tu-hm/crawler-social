@@ -23,7 +23,7 @@ from tests.conftest import make_config, make_db
 
 PAGE_URL = "https://www.facebook.com/ExamplePublicPage"
 HTML = b"<html><body>" + b"x" * 5000 + b"</body></html>"
-#: What one real capture weighs, near enough: the point of the change.
+#: Roughly what one real capture weighs.
 BIG_HTML = b"<html><body>" + b"x" * 400_000 + b"</body></html>"
 
 
@@ -97,7 +97,7 @@ def test_an_old_database_loses_its_markup_and_keeps_its_snapshots(tmp_path):
     _legacy_db(path)
     before = path.stat().st_size
 
-    conn = db.connect(path)  # the migration runs here
+    conn = db.connect(path)
     try:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)")}
         rows = conn.execute(

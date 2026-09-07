@@ -1,4 +1,4 @@
-"""Required tests from plans/v1/04-parser.md."""
+"""Tests for the parser."""
 
 from __future__ import annotations
 
@@ -36,7 +36,6 @@ def test_parse_is_pure_and_deterministic(parsed):
 def test_missing_optional_field_becomes_none_without_failing(parsed):
     posts, _ = parsed
     by_id = {p.post_id: p for p in posts}
-    # 1003 has no author header; 1004 has no timestamp.
     assert by_id["777003"].author is None
     assert by_id["777004"].published_at is None
 
@@ -63,7 +62,6 @@ def test_text_and_author_extracted(parsed):
 
 def test_malformed_candidates_skipped_with_diagnostic(parsed):
     posts, diagnostics = parsed
-    # The empty 1005 article (no text) and junk node (no id) are skipped.
     assert all(p.post_id != "777005" for p in posts)
     reasons = {d.reason for d in diagnostics}
     assert "no post id found" in reasons

@@ -1,4 +1,4 @@
-"""Required tests from plans/v2/04-ui-shell.md."""
+"""Tests for the UI shell."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def test_home_renders_post_count(client):
     resp = client.get("/")
     assert resp.status_code == 200
     assert resp.headers["cache-control"] == "no-store"
-    assert "2" in resp.text  # the count appears in cards and footer
+    assert "2" in resp.text
     assert "posts stored" in resp.text
 
 

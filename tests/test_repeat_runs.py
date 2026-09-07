@@ -1,4 +1,4 @@
-"""Required tests from plans/v1/05-safe-repeat-runs.md."""
+"""Tests that repeat runs stay safe."""
 
 from __future__ import annotations
 
@@ -200,7 +200,6 @@ def test_second_process_receives_clear_lock_message(tmp_path):
         assert "lock" in str(excinfo.value)
     finally:
         lock.release()
-    # After release the lock is available again.
     FileLock(tmp_path / "browser.lock").acquire()
 
 

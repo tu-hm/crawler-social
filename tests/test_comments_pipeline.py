@@ -1,4 +1,4 @@
-"""Tests for the comment pass in `pipeline.run_crawl` (plans/v3/03).
+"""Tests for the comment pass in `pipeline.run_crawl`.
 
 `capture_comments` is stubbed the way `capture_snapshots` already is in
 tests/test_repeat_runs.py: no browser, no network. What is under test is
@@ -180,7 +180,6 @@ def test_a_per_post_failure_is_a_diagnostic_not_a_failed_run(tmp_path):
     assert summary.status == "completed"
     assert summary.comments_captured == 0
     assert any("goto failed" in d for d in summary.diagnostics)
-    # The post itself survived the comment failure.
     conn = db.connect(config.db_path)
     try:
         assert conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0] == 1
@@ -225,9 +224,6 @@ def test_comments_survive_a_second_run_without_duplicating(tmp_path):
     rows = stored_comments(config.db_path)
     assert len(rows) == 3
     assert len({r[1] for r in rows}) == 3
-
-
-# -- the `crawler comments` read command ------------------------------------
 
 
 def test_comments_command_lists_stored_comments(tmp_path, monkeypatch):

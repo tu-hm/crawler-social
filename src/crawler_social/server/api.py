@@ -36,7 +36,6 @@ class PostOut(BaseModel):
     published_at: Optional[str] = None
     first_seen: str
     last_seen: str
-    #: Absent from rows written before the v3 migration.
     post_url: Optional[str] = None
 
 
@@ -71,7 +70,6 @@ class SnapshotOut(BaseModel):
     page_url: str
     captured_at: str
     sha256: str
-    #: Bytes fetched. The markup itself is not kept -- see the posts.
     size_bytes: int
 
 
@@ -127,12 +125,7 @@ POST_CSV_COLUMNS = (
     "first_seen", "last_seen",
 )
 
-#: Leading characters a spreadsheet reads as the start of a formula. Post
-#: text and author names come from a third party, so a cell beginning with
-#: one of these is prefixed with an apostrophe before it is written -- the
-#: sheet then shows the original text instead of evaluating it. "-" is in
-#: the set because the DDE vector starts with one; the cost is an
-#: apostrophe in front of a line that opened with a dash.
+#: A cell starting with one of these is run as a formula by a spreadsheet.
 CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 
@@ -179,8 +172,7 @@ def list_comments(
     limit: Annotated[int, Query(ge=1, le=queries.MAX_PAGE_SIZE)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> Page[CommentOut]:
-    # Registered before /posts/{post_id:path}: the :path converter is greedy
-    # and would otherwise swallow the trailing /comments as part of the id.
+    # Must precede /posts/{post_id:path}: that greedy converter eats /comments.
     rows, total = queries.list_comments(
         conn, post_id=post_id, limit=limit, offset=offset
     )
@@ -189,9 +181,7 @@ def list_comments(
 
 @router.get("/posts/{post_id:path}", response_model=PostOut)
 def get_post(conn: Conn, post_id: str) -> PostOut:
-    # post_id uses the :path converter: Facebook ids can contain characters
-    # that arrive percent-encoded (a slash or a percent sign) and must
-    # round-trip through the decoded path.
+    # :path converter: a Facebook post id can contain an encoded slash.
     post = queries.get_post(conn, post_id)
     if post is None:
         raise HTTPException(status_code=404, detail="post_not_found")

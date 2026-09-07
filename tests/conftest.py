@@ -42,8 +42,7 @@ def make_db(
         for started_at, status, finished_at, error in runs or []:
             run_id = db.start_run(conn, started_at)
             if status == "running" and finished_at is None:
-                # Leave the row genuinely running: finish_run would stamp a
-                # finished_at, and a real running row has none.
+                # finish_run would stamp a finished_at; a real running row has none.
                 run_ids.append(run_id)
                 continue
             db.finish_run(conn, run_id, status, error, finished_at=finished_at)

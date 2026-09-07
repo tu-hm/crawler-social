@@ -1,4 +1,4 @@
-"""Tests for the "See more" expansion (plans/v3/01).
+"""Tests for the "See more" expansion.
 
 Expansion is browser behaviour, so it is driven here by a fake page that
 records clicks instead of a real Chrome. What is verified is the contract
@@ -28,8 +28,7 @@ class FakeElement:
         on_click=None,
     ):
         self.name = name
-        #: A real expander's label is its own visible text; an icon-only
-        #: menu button has an aria-label and no text at all.
+        #: A real expander's label is its own visible text; a menu button has none.
         self.text = name if text is None else text
         self.attrs = dict(attrs or {})
         self._visible = visible
@@ -232,8 +231,7 @@ def test_a_dead_page_ends_the_loop_without_raising():
         ("Xem thêm", True),
         ("Voir plus", True),
         ("… More", True),
-        # The trap this pattern exists to avoid: the Vietnamese label for
-        # "view more comments" starts with the words for "see more".
+        # The trap: "view more comments" in Vietnamese starts with "see more".
         ("Xem thêm bình luận", False),
         ("View 5 more comments", False),
     ],
@@ -242,13 +240,6 @@ def test_see_more_pattern_does_not_match_comment_labels(label, expanding):
     assert bool(facebook.SEE_MORE_PATTERN.search(label)) is expanding
     if not expanding:
         assert facebook.MORE_COMMENTS_PATTERN.search(label)
-
-
-# --- The group-page trap: buttons that *are* named "Xem them" -------------
-#
-# On a group page the header kebab, the tab-bar overflow and the post action
-# menu all carry the accessible name "Xem them" / "More". Matching on the
-# accessible name alone made expansion click those menus instead of the text.
 
 
 def test_a_menu_button_named_see_more_is_not_clicked():
@@ -312,7 +303,6 @@ def test_a_stray_button_does_not_stop_the_real_ones():
         ("See more", True),
         ("... More", True),
         ("Xem thêm", True),
-        # Group chrome labels that must never look like an expander.
         ("More options", False),
         ("Xem thêm tùy chọn", False),
         ("See more options", False),
