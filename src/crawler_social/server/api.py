@@ -47,7 +47,12 @@ class CommentOut(BaseModel):
     text: Optional[str] = None
     published_at: Optional[str] = None
     like_count: Optional[int] = None
+    #: Scoped to the siblings: a top-level comment ranks among the post's
+    #: comments, a reply among the replies to its own parent.
     rank_index: int
+    #: The comment this one replies to; null at top level. Absent from a
+    #: database written before threading, where it reads as null.
+    parent_comment_id: Optional[str] = None
     first_seen: str
     last_seen: str
 

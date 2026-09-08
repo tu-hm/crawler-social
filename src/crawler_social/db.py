@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
-from .schema import SCHEMA_SQL
+from .schema import INDEXES_SQL, SCHEMA_SQL, TABLES_SQL
 
 
 def utc_now_iso() -> str:
@@ -30,8 +30,12 @@ def connect(path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
-    conn.executescript(SCHEMA_SQL)
+    # Tables, then the ALTERs, then the indexes: an index on a column a
+    # migration is about to add cannot be created before it exists, and on an
+    # older database that failure is the whole file refusing to open.
+    conn.executescript(TABLES_SQL)
     _migrate_columns(conn)
+    conn.executescript(INDEXES_SQL)
     dropped = _drop_snapshot_html(conn)
     conn.commit()
     if dropped:
@@ -46,9 +50,19 @@ def connect(path: Path) -> sqlite3.Connection:
 _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("posts", "post_url", "ALTER TABLE posts ADD COLUMN post_url TEXT"),
     (
+        "posts",
+        "reaction_count",
+        "ALTER TABLE posts ADD COLUMN reaction_count INTEGER",
+    ),
+    (
         "snapshots",
         "size_bytes",
         "ALTER TABLE snapshots ADD COLUMN size_bytes INTEGER",
+    ),
+    (
+        "comments",
+        "parent_comment_id",
+        "ALTER TABLE comments ADD COLUMN parent_comment_id TEXT",
     ),
 )
 
@@ -204,20 +218,48 @@ def upsert_post(
     published_at: str | None,
     seen_at: str | None = None,
     post_url: str | None = None,
+    reaction_count: int | None = None,
 ) -> None:
+    """Store one post, keeping the best version of it seen so far.
+
+    A post is seen twice: clipped to a preview in the feed, then whole on its
+    own permalink, and the two arrive in that order. So `text` keeps whichever
+    is longer rather than whichever came first -- otherwise the feed's
+    truncated body would outlive the full one the hydration pass fetched.
+    """
     seen = seen_at or utc_now_iso()
     conn.execute(
         """
-        INSERT INTO posts (post_id, page_url, text, author, published_at, post_url, first_seen, last_seen)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO posts (post_id, page_url, text, author, published_at, post_url,
+                           reaction_count, first_seen, last_seen)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(post_id) DO UPDATE SET
-            text = COALESCE(excluded.text, posts.text),
+            text = CASE
+                WHEN excluded.text IS NULL THEN posts.text
+                WHEN posts.text IS NULL THEN excluded.text
+                WHEN LENGTH(excluded.text) > LENGTH(posts.text) THEN excluded.text
+                ELSE posts.text
+            END,
             author = COALESCE(excluded.author, posts.author),
             published_at = COALESCE(excluded.published_at, posts.published_at),
             post_url = COALESCE(excluded.post_url, posts.post_url),
+            -- A later capture of the same post carries the newer tally, so
+            -- this one overwrites rather than COALESCEs. A capture that
+            -- showed no count leaves the stored one alone.
+            reaction_count = COALESCE(excluded.reaction_count, posts.reaction_count),
             last_seen = excluded.last_seen
         """,
-        (post_id, page_url, text, author, published_at, post_url, seen, seen),
+        (
+            post_id,
+            page_url,
+            text,
+            author,
+            published_at,
+            post_url,
+            reaction_count,
+            seen,
+            seen,
+        ),
     )
 
 
@@ -232,26 +274,33 @@ def upsert_comment(
     like_count: int | None,
     rank_index: int,
     seen_at: str | None = None,
+    parent_comment_id: str | None = None,
 ) -> None:
     """Store one comment, keeping the best values seen so far.
 
     The nullable fields are COALESCEd like a post's, so a later, poorer
     parse never erases a better one. rank_index is overwritten on purpose:
     the newest observed position in Facebook's ordering is the useful one.
+    `parent_comment_id` is COALESCEd with the rest -- a run that captured a
+    reply without its parent must not un-thread a reply an earlier run
+    already placed.
     """
     seen = seen_at or utc_now_iso()
     conn.execute(
         """
         INSERT INTO comments (comment_id, post_id, page_url, author, text,
                               published_at, like_count, rank_index,
-                              first_seen, last_seen)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              parent_comment_id, first_seen, last_seen)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(comment_id) DO UPDATE SET
             author = COALESCE(excluded.author, comments.author),
             text = COALESCE(excluded.text, comments.text),
             published_at = COALESCE(excluded.published_at, comments.published_at),
             like_count = COALESCE(excluded.like_count, comments.like_count),
             rank_index = excluded.rank_index,
+            parent_comment_id = COALESCE(
+                excluded.parent_comment_id, comments.parent_comment_id
+            ),
             last_seen = excluded.last_seen
         """,
         (
@@ -263,6 +312,7 @@ def upsert_comment(
             published_at,
             like_count,
             rank_index,
+            parent_comment_id,
             seen,
             seen,
         ),
@@ -339,8 +389,8 @@ def list_posts(
 ) -> list[tuple]:
     """List posts newest first with a parameterized optional text filter."""
     sql = (
-        "SELECT post_id, page_url, text, author, published_at, first_seen, last_seen"
-        " FROM posts"
+        "SELECT post_id, page_url, text, author, published_at, reaction_count,"
+        " first_seen, last_seen FROM posts"
     )
     params: list[object] = []
     if contains is not None:
@@ -358,14 +408,24 @@ def list_comments(
     limit: int = 20,
 ) -> list[tuple]:
     """List comments in Facebook's own order (rank_index), newest post first."""
+    # A reply's rank_index counts its siblings, so the join lifts it to its
+    # parent's rank: the thread's position on the post. Without that, ordering
+    # by rank alone would interleave one thread's replies with another's.
     sql = (
-        "SELECT comment_id, post_id, page_url, author, text, published_at,"
-        " like_count, rank_index, first_seen, last_seen FROM comments"
+        "SELECT c.comment_id, c.post_id, c.page_url, c.author, c.text,"
+        " c.published_at, c.like_count, c.rank_index, c.parent_comment_id,"
+        " c.first_seen, c.last_seen FROM comments c"
+        " LEFT JOIN comments p ON p.comment_id = c.parent_comment_id"
     )
     params: list[object] = []
     if post_id is not None:
-        sql += " WHERE post_id = ?"
+        sql += " WHERE c.post_id = ?"
         params.append(post_id)
-    sql += " ORDER BY first_seen DESC, post_id ASC, rank_index ASC LIMIT ?"
+    sql += (
+        " ORDER BY c.first_seen DESC, c.post_id ASC,"
+        " COALESCE(p.rank_index, c.rank_index) ASC,"
+        " COALESCE(p.comment_id, c.comment_id) ASC,"
+        " (c.parent_comment_id IS NOT NULL) ASC, c.rank_index ASC LIMIT ?"
+    )
     params.append(limit)
     return conn.execute(sql, params).fetchall()

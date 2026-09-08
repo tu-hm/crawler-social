@@ -97,3 +97,25 @@ def test_empty_page_is_not_blocking():
 
 def test_garbage_bytes_do_not_raise():
     assert wall.classify(b"\x00\xff not html", "").kind in {wall.EMPTY, wall.OK}
+
+
+def test_modern_feed_without_article_roles_is_not_read_as_empty():
+    """Stories moved to aria-posinset; counting role="article" alone saw a rendered feed as empty."""
+    html = (
+        b'<div aria-posinset="1">'
+        b'<div data-ad-rendering-role="profile_name">Tin Tuc Moi</div>'
+        b'<div data-ad-comet-preview="message">Tau ca cho sieu me hang cam hom nay.</div>'
+        b"</div>"
+    )
+    verdict = wall.classify(html, "https://www.facebook.com/groups/900")
+    assert verdict.kind == wall.OK
+    assert verdict.article_count == 1
+
+
+def test_feed_unit_is_not_counted_twice_when_it_is_also_an_article():
+    html = (
+        b'<div role="article" aria-posinset="1">'
+        b"A story long enough to clear the minimum text threshold."
+        b"</div>"
+    )
+    assert wall.classify(html).article_count == 1

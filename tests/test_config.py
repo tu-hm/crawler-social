@@ -10,6 +10,18 @@ import pytest
 from crawler_social.config import DEFAULT_SERVE_HOST, DEFAULT_SERVE_PORT, load_config
 
 
+@pytest.fixture(autouse=True)
+def ignore_local_dotenv(monkeypatch):
+    """Assert the built-in defaults, not whatever the developer's .env holds.
+
+    `load_config` merges the project's own `.env` under whatever env it is
+    handed, and resolves that file from the working directory rather than
+    from the env -- so without this every default asserted here is really an
+    assertion that the local `.env` says nothing about it.
+    """
+    monkeypatch.setattr("crawler_social.config._load_dotenv", lambda path: {})
+
+
 def _env(**overrides: str) -> dict[str, str]:
     env = {k: v for k, v in {
         "CRAWLER_PROFILE_DIR": "/tmp/profile",

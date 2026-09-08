@@ -1,23 +1,24 @@
 # crawler-social
 
-> **The first version is intentionally small:** one public Facebook Page, one SQLite
-> database, five parsed fields, and two CLI commands. (One thing has since moved on:
-> captures are parsed for their text and their markup discarded — see "What a crawl
-> keeps" below.) The larger documents below are reference material for
-> later expansion, not prerequisites for starting implementation. The active v1 supports
-> both macOS and desktop Linux.
+> **A small, deliberate crawler for Facebook pages and groups you can already
+> read.** It stores whole posts — body, author, exact publication time,
+> reaction total, and the comment thread with its replies — as text in one
+> SQLite database, and ships a local read-only web viewer for browsing them.
+> Captures are parsed and their markup discarded; see "What a crawl keeps".
+> Runs on desktop Linux and macOS.
 
-**Current status: planning only; no application code has been written.** The detailed
-documents below capture the larger, originally macOS-oriented multi-source design frozen on
-**2026-09-01**. Keep them as reference, but implement the smaller cross-platform v1 first
-and only bring decisions forward when the working product actually needs them.
+**Current status: this version is built and tested.** The "Legacy" documents at
+the bottom are an older, larger multi-source design frozen on **2026-09-01**.
+They are reference material, not a plan: read one only when the feature being
+added actually needs the decision it settles.
 
 ---
 
-## Active v1
+## The crawler
 
-Build one public Facebook Page crawler. Do not apply for other platform credentials,
-design private storage, or install a scheduler for this version.
+One Facebook crawler, for pages and groups you can already read. Do not apply
+for other platform credentials, design private storage, or install a scheduler
+for this version.
 
 ### Getting a session
 
@@ -29,6 +30,32 @@ uv run crawler login     # a window opens; sign in yourself, 2FA included
 uv run crawler session   # "session looks live (ok)"
 uv run crawler crawl "https://www.facebook.com/<page>" --limit 5
 ```
+
+### Crawling several pages and groups
+
+`crawl` takes any number of URLs, or a file of them — one per line, with
+headings and `#` comments ignored, so a hand-written list works as it is:
+
+```console
+$ cat example.txt
+Groups:
+
+https://www.facebook.com/groups/VNOIForum
+https://www.facebook.com/groups/IffIndianFootballFans
+
+Page:
+https://www.facebook.com/vnoi.wiki
+https://www.facebook.com/olaclass.edu
+
+$ uv run crawler crawl --targets example.txt --full --limit 20
+$ make full                       # the same thing
+```
+
+Targets are crawled in order, one run each, and a target that fails is
+reported and skipped rather than ending the session. A **wall** is the
+exception: it stops there, because the next target would meet the same one and
+hammering it makes it worse. Set `CRAWLER_TARGETS_FILE` to make a list the
+default for a bare `crawler crawl`.
 
 If signing in that way gets challenged, attach to a Chrome you started yourself instead
 — a browser automation did not launch is not flagged as automated:
@@ -46,8 +73,8 @@ as evidence, leaves the watermark untouched, and exits `3` with the remedy.
 
 A crawl stores **text, not pages**. Page markup is never written anywhere: a
 capture is hashed and measured on the way past, the parser reads it in memory,
-and what lands in the database is the text — the posts, and their top comments
-when you ask for them — plus one `snapshots` row per capture recording run,
+and what lands in the database is the text — the posts, and their comment
+threads when you ask for them — plus one `snapshots` row per capture recording run,
 page, capture time, byte size, and SHA-256. One Facebook page load is several
 megabytes; fifty of them grew the database past 300 MB with nothing in it you
 could search.
@@ -61,6 +88,127 @@ Databases written when markup was still stored migrate themselves on the next
 open — the `html` column is dropped, each snapshot's size is preserved, and the
 file is VACUUMed back down. Every post, comment, run, and snapshot row
 survives.
+
+### How a post is identified, and where its timestamp comes from
+
+Facebook no longer serves a story id for every post. On a group or Page feed
+each story is an `aria-posinset` unit — `role="article"` now belongs to
+comments alone — and **the feed carries neither the story's permalink nor its
+publication time**. Facebook fills both in only once the pointer is over the
+timestamp link. Some stories still expose an id on an attachment link
+(`…&set=gm.<id>`); most expose none at all.
+
+So the crawler hovers. Before each capture it moves the pointer over every
+on-screen story's timestamp, waits for Facebook to fill the href in and render
+its tooltip, and writes what appeared onto the story node as three attributes:
+
+```html
+<div aria-posinset="4"
+     data-crawler-permalink="https://www.facebook.com/groups/…/posts/2136830243711210/"
+     data-crawler-timestamp="8 Tháng 9, 2025 lúc 14:32"
+     data-crawler-tz-offset="-420">
+```
+
+The parser reads them back out of the captured bytes like any other
+attribute, so it stays pure: bytes in, dataclasses out, no browser. The
+offset is `Date.getTimezoneOffset()` from the capturing browser — the tooltip
+is rendered in local time, and without knowing which zone that was there is no
+way back to UTC. Hovering never clicks, so it cannot navigate, open a menu, or
+mark anything as seen. Turn it off with `--no-hover` when debugging capture
+itself; nothing else wants it off.
+
+A hovered href is still treated as untrusted input: it is checked against the
+Facebook host list before it is used as a permalink *or* read for an id, since
+the next pass navigates to it.
+
+When the hover yields nothing, the older fallbacks still apply — the id from
+the markup where there is one, otherwise a stable id derived by hashing the
+page URL, the author and the post text, stored with an `h-` prefix. The digest
+deliberately excludes the timestamp, which an un-hovered feed renders as a
+relative age ("4m") and would therefore differ on every capture, filing one
+post as a new post per run.
+
+Two consequences worth knowing. An edited post changes its digest, so it lands
+as a new row rather than an update. And a post that ends up with a derived id
+has no permalink to visit, so it is skipped by the permalink pass — which is
+exactly what the hover exists to prevent.
+
+### The permalink pass: whole posts, comments and replies
+
+A post is read twice, because the feed cannot show all of it.
+
+1. **The feed pass** finds the post and reads what the feed renders: the
+   author, a body that may be clipped, a relative age, a reaction count.
+2. **The permalink pass** opens the post's own page and re-reads it whole.
+   That is where the untruncated body, the exact publication time, the settled
+   reaction total, and the comment thread come from.
+
+The second pass costs one page load per post, so it is opt-in:
+
+```console
+$ crawler crawl "<group url>" --full --limit 20
+run: 7 | snapshots: 2 (31 total) | new posts: 18 | existing posts: 2 | errors: 0
+full posts: 18 | comments: 214 across 17 posts
+status: completed
+```
+
+`--full` is shorthand for "collect everything": hover for the time and
+permalink, expand long bodies, then visit every post the feed yielded (`--limit`
+is the ceiling on how many that is) for up to 50 top-level comments and their
+replies. An explicit flag still wins, so `--full --comments 5` asks for five.
+The individual flags — `--comments`, `--comments-max-posts`, `--replies`,
+`--expand`, `--hover` — and their `.env` defaults are all still there.
+
+When a post is stored twice, the better read wins: `text` keeps whichever
+version is **longer**, so the permalink's whole body replaces the feed's
+clipped one, and every other field COALESCEs, so a poorer later parse never
+erases a better earlier one.
+
+Only posts with a real Facebook id are visited: a post keyed by content hash
+has no permalink to open. The visit goes to the story URL
+(`<group>/posts/<id>`), never the photo viewer that the feed links to — the
+media viewer's comment list is not the post's.
+
+**Comments never cost you posts.** The pass runs *after* the post transaction
+commits, so a permalink that will not load becomes a diagnostic on a run that
+still reports `completed`. A wall (login, checkpoint, rate limit) is the one
+exception: it stops the run, and the posts stay committed.
+
+#### Threading
+
+Replies are stored, threaded under the comment they answer:
+
+```
+comments.parent_comment_id   NULL at top level, else the answered comment
+comments.rank_index          scoped to the siblings
+```
+
+So `rank_index` is read together with `parent_comment_id`: rank 1 means "the
+top comment" or "the first reply to that comment" depending on which is set.
+Threading is read from the DOM — a reply is nested inside its parent — rather
+than from the aria-label, whose "Reply by X" / "Comment by X" wording is not
+consistent across Facebook's surfaces. Reply threads are collapsed behind
+"View 3 replies" and are genuinely absent from the DOM until it is clicked, so
+the crawler clicks it, the same bargain as "See more".
+
+`--comments N` caps **top-level** comments; the replies to a comment that made
+the cut come back with it, free. A reply whose parent was dropped is dropped
+too, never re-parented to the post — that would read as a top-level comment
+nobody wrote. `--no-replies` restores the old top-level-only behaviour.
+
+The `parent_comment_id` column is an additive migration applied in place on
+the next crawl. The read-only viewer detects whether the file has it and
+sorts flat when it does not, so a database written before threading still
+browses normally.
+
+#### Reactions
+
+`posts.reaction_count` and `comments.like_count` both hold the **total across
+every emotion**, read from the count Facebook renders beside the reaction
+icons. The per-emotion labels ("Like: 99 people", "Haha: 28 people") are not
+summed, because Facebook lists only the leading emotions and they add up to
+less than the real total. Both are `NULL` when the capture showed no count at
+all, which is what Facebook renders for something nobody has reacted to.
 
 ## Web viewer
 
@@ -135,6 +283,9 @@ uv run crawler crawl <page-url>                  # bodies expanded
 uv run crawler crawl <page-url> --no-expand      # capture what is on screen
 ```
 
+The feed's copy is expanded on a best-effort basis; the permalink pass reads
+the body whole, which is why `--full` is the reliable way to get long posts.
+
 Only elements with the button role are clicked, each click is budgeted and re-queried,
 and if a click ever navigates away the crawler goes back and stops expanding — an
 expansion click must never turn into a page visit you did not ask for.
@@ -144,14 +295,16 @@ visit: they are read from the post's own permalink page, not from the feed, whic
 virtualized and does not order comments by relevance.
 
 ```console
+uv run crawler crawl <page-url> --full                              # everything
 uv run crawler crawl <page-url> --comments 10                       # top 10 per post
 uv run crawler crawl <page-url> --comments 10 --comments-max-posts 5
+uv run crawler crawl <page-url> --comments 10 --no-replies          # top level only
 uv run crawler comments --post-id <id> --limit 20                   # read them back
 ```
 
 - **"Top N" means the first N in Facebook's own default order.** The crawler does not
   re-rank; `rank_index` records the position a comment held when it was captured.
-  Nested replies are excluded — only top-level comments are stored.
+  Replies are stored under their parent — see "Threading" above.
 - **Comments never cost you posts.** The pass runs *after* the post transaction commits,
   so a permalink that will not load, or a comment thread that fails to expand, becomes a
   diagnostic on a run that still reports `completed`. A wall (login, checkpoint, rate
@@ -159,7 +312,8 @@ uv run crawler comments --post-id <id> --limit 20                   # read them 
 - **Defaults live in `.env`** as `CRAWLER_TOP_COMMENTS`, `CRAWLER_COMMENTS_MAX_POSTS`,
   and `CRAWLER_EXPAND_TEXT`; the command-line flags override them per run.
 
-The viewer shows comments on a post's detail page and serves them at
+The viewer shows the comment thread on a post's detail page, replies indented
+under the comment they answer, and serves the same order at
 `GET /api/posts/<id>/comments`. Adding these was an additive migration: `posts` gained a
 `post_url` column and a `comments` table appeared, both applied in place on the next
 crawl. The viewer opens the database read-only and so cannot migrate anything — it

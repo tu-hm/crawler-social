@@ -120,7 +120,14 @@ def test_fixture_snapshot_end_to_end(db_file: Path):
     fixture = Path(__file__).parent / "fixtures" / "facebook_page_sample.html"
     raw_html = fixture.read_bytes()
     posts, _diagnostics = parser.parse(raw_html, PAGE_URL, CAPTURED_AT)
-    assert [p.post_id for p in posts] == ["777001", "777002", "777003", "777004", "6006"]
+    ids = [p.post_id for p in posts]
+    assert [i for i in ids if not i.startswith("h-")] == [
+        "777001",
+        "777002",
+        "777003",
+        "777004",
+        "6006",
+    ]
 
     captured_at = CAPTURED_AT.isoformat()
     conn = db.connect(db_file)

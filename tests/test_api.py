@@ -247,6 +247,33 @@ def test_comments_route_wins_over_the_greedy_post_id_converter(seeded: Path):
     assert [c["comment_id"] for c in resp.json()["items"]] == ["cx"]
 
 
+def test_comments_come_back_threaded_with_each_reply_under_its_parent(seeded: Path):
+    from crawler_social import db
+    from crawler_social.server.app import create_app
+
+    conn = db.connect(seeded)
+    try:
+        with db.transaction(conn):
+            db.upsert_comment(conn, "c2", "p001", "u", "Bea", "second", None, 0, 2)
+            db.upsert_comment(conn, "c1", "p001", "u", "Ann", "first", None, 0, 1)
+            # Inserted last and named "r1": neither insertion order nor id
+            # sorting would put it where it belongs on its own.
+            db.upsert_comment(
+                conn, "r1", "p001", "u", "Cy", "reply to Ann", None, 0, 1,
+                parent_comment_id="c1",
+            )
+    finally:
+        conn.close()
+
+    client = TestClient(create_app(make_config(seeded)))
+    items = client.get("/api/posts/p001/comments").json()["items"]
+    assert [(c["author"], c["parent_comment_id"]) for c in items] == [
+        ("Ann", None),
+        ("Cy", "c1"),
+        ("Bea", None),
+    ]
+
+
 def test_comments_for_a_post_without_any_are_empty_not_404(client):
     body = client.get("/api/posts/p002/comments").json()
     assert body == {"items": [], "total": 0, "limit": 50, "offset": 0}

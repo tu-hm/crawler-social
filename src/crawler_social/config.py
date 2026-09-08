@@ -18,6 +18,10 @@ gitignored `.env` file next to the project root. Supports:
 - CRAWLER_TOP_COMMENTS (0 = off; comments wanted per post)
 - CRAWLER_COMMENTS_MAX_POSTS (ceiling on permalink visits per run)
 - CRAWLER_EXPAND_TEXT ("1"/"0"; click "See more" before capture)
+- CRAWLER_INCLUDE_REPLIES ("1"/"0"; store reply threads, not just top-level)
+- CRAWLER_HOVER_TIMESTAMPS ("1"/"0"; hover each story to make its permalink
+  and exact publication time exist -- a feed carries neither)
+- CRAWLER_TARGETS_FILE (default list of URLs to crawl, one per line)
 """
 
 from __future__ import annotations
@@ -53,6 +57,9 @@ class Config:
     top_comments: int = DEFAULT_TOP_COMMENTS
     comments_max_posts: int = DEFAULT_COMMENTS_MAX_POSTS
     expand_text: bool = True
+    include_replies: bool = True
+    hover_timestamps: bool = True
+    targets_file: Path | None = None
 
 
 def _bool_env(value: str | None, default: bool) -> bool:
@@ -144,4 +151,11 @@ def load_config(env: dict[str, str] | None = None) -> Config:
             minimum=1,
         ),
         expand_text=_bool_env(env.get("CRAWLER_EXPAND_TEXT"), True),
+        include_replies=_bool_env(env.get("CRAWLER_INCLUDE_REPLIES"), True),
+        hover_timestamps=_bool_env(env.get("CRAWLER_HOVER_TIMESTAMPS"), True),
+        targets_file=(
+            Path(env["CRAWLER_TARGETS_FILE"])
+            if env.get("CRAWLER_TARGETS_FILE")
+            else None
+        ),
     )

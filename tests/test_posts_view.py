@@ -236,7 +236,7 @@ def test_post_detail_shows_stored_comments_in_rank_order(db_file: Path):
     page = client.get("/posts/post-000").text
     assert "Comments" in page
     assert page.index("top reply") < page.index("later reply")
-    assert "Ann" in page and "9 likes" in page
+    assert "Ann" in page and "9 reactions" in page
 
 
 def test_post_detail_hides_the_panel_when_there_are_no_comments(client: TestClient):

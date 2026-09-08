@@ -181,3 +181,71 @@ def test_list_comments_filters_by_post(conn):
     assert [r[0] for r in db.list_comments(conn, post_id="p1")] == ["c1"]
     assert len(db.list_comments(conn)) == 2
 
+
+#: The comments table exactly as the version before threading wrote it.
+_PRE_THREADING_SQL = """
+CREATE TABLE posts (
+    post_id TEXT PRIMARY KEY, page_url TEXT NOT NULL, text TEXT, author TEXT,
+    published_at TEXT, post_url TEXT, reaction_count INTEGER,
+    first_seen TEXT NOT NULL, last_seen TEXT NOT NULL
+);
+CREATE TABLE comments (
+    comment_id TEXT PRIMARY KEY, post_id TEXT NOT NULL REFERENCES posts(post_id),
+    page_url TEXT NOT NULL, author TEXT, text TEXT, published_at TEXT,
+    like_count INTEGER, rank_index INTEGER NOT NULL,
+    first_seen TEXT NOT NULL, last_seen TEXT NOT NULL
+);
+"""
+
+
+def test_a_database_written_before_threading_opens_and_migrates(tmp_path):
+    """The index on parent_comment_id must not be created before the column.
+
+    Creating it first makes an older database refuse to open at all, which is
+    every stored post and comment unreachable rather than one missing feature.
+    """
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    try:
+        old.executescript(_PRE_THREADING_SQL)
+        old.execute(
+            "INSERT INTO posts VALUES ('p1', 'u', 'body', 'Ann', NULL, NULL,"
+            " NULL, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
+        )
+        old.execute(
+            "INSERT INTO comments VALUES ('c1', 'p1', 'u', 'Bea', 'hi', NULL,"
+            " NULL, 1, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
+        )
+        old.commit()
+    finally:
+        old.close()
+
+    conn = db.connect(path)
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(comments)")}
+        assert "parent_comment_id" in columns
+        indexes = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            )
+        }
+        assert "idx_comments_parent" in indexes
+        # Nothing was lost on the way through.
+        assert conn.execute("SELECT COUNT(*) FROM comments").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0] == 1
+        assert (
+            conn.execute(
+                "SELECT parent_comment_id FROM comments WHERE comment_id = 'c1'"
+            ).fetchone()[0]
+            is None
+        )
+        # And it is writable as a current database, threading included.
+        with db.transaction(conn):
+            db.upsert_comment(
+                conn, "r1", "p1", "u", "Cy", "reply", None, None, 1,
+                parent_comment_id="c1",
+            )
+        assert conn.execute("SELECT COUNT(*) FROM comments").fetchone()[0] == 2
+    finally:
+        conn.close()

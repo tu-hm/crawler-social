@@ -15,6 +15,11 @@
   <dd>{{ post.author or "(none)" }}</dd>
   <dt>Published (UTC)</dt>
   <dd>{{ post.published_at or "(none)" }}</dd>
+  <dt>Reactions</dt>
+  <dd>
+    {% if post.reaction_count is not none %}{{ post.reaction_count }}
+    {% else %}<span class="muted">(not shown)</span>{% endif %}
+  </dd>
   <dt>First seen</dt>
   <dd>{{ post.first_seen }} <span class="secondary">({{ first_seen_age }})</span></dd>
   <dt>Last seen</dt>
@@ -47,14 +52,18 @@
   <div class="page-head">
     <h2>Comments <span class="secondary">({{ comment_total }})</span></h2>
   </div>
-  <p class="muted">In the order Facebook showed them when the post was captured.</p>
+  <p class="muted">
+    In the order Facebook showed them when the post was captured.
+    Replies sit under the comment they answer.
+  </p>
   <ol class="comment-list">
     {% for comment in comments %}
-    <li class="comment">
+    <li class="comment{% if comment.parent_comment_id %} comment-reply{% endif %}">
       <div class="comment-head">
+        {% if comment.parent_comment_id %}<span class="secondary" aria-hidden="true">↳</span>{% endif %}
         <strong>{{ comment.author or "(unknown)" }}</strong>
         {% if comment.published_at %}<span class="secondary">{{ comment.published_at }}</span>{% endif %}
-        {% if comment.like_count is not none %}<span class="secondary">· {{ comment.like_count }} likes</span>{% endif %}
+        {% if comment.like_count is not none %}<span class="secondary">· {{ comment.like_count }} reactions</span>{% endif %}
       </div>
       <div class="comment-body">{{ comment.text or "(no text)" }}</div>
     </li>

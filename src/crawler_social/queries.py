@@ -26,7 +26,7 @@ _BASE_POST_COLUMNS = (
     "post_id, page_url, text, author, published_at, first_seen, last_seen"
 )
 
-_COMMENT_COLUMNS = (
+_BASE_COMMENT_COLUMNS = (
     "comment_id, post_id, page_url, author, text, published_at, "
     "like_count, rank_index, first_seen, last_seen"
 )
@@ -64,18 +64,30 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
 def _post_columns(conn: sqlite3.Connection) -> str:
     """Post columns this database actually has.
 
-    `posts.post_url` and the `comments` table arrived in v3, and the viewer
-    opens the file read-only -- it cannot run the migration itself. A
-    database written by an older crawler is read without the newer parts
-    instead of failing, and picks them up the next time a crawl runs.
+    `posts.post_url` and the `comments` table arrived in v3,
+    `posts.reaction_count` later still, and the viewer opens the file
+    read-only -- it cannot run the migration itself. A database written by
+    an older crawler is read without the newer parts instead of failing,
+    and picks them up the next time a crawl runs.
     """
-    if "post_url" in _table_columns(conn, "posts"):
-        return _BASE_POST_COLUMNS + ", post_url"
-    return _BASE_POST_COLUMNS
+    columns = _table_columns(conn, "posts")
+    selected = _BASE_POST_COLUMNS
+    for optional in ("post_url", "reaction_count"):
+        if optional in columns:
+            selected += f", {optional}"
+    return selected
 
 
 def _has_comments(conn: sqlite3.Connection) -> bool:
     return bool(_table_columns(conn, "comments"))
+
+
+def _comment_columns(conn: sqlite3.Connection) -> tuple[str, bool]:
+    """(columns, threaded). `parent_comment_id` arrived after the table did."""
+    threaded = "parent_comment_id" in _table_columns(conn, "comments")
+    if threaded:
+        return f"{_BASE_COMMENT_COLUMNS}, parent_comment_id", True
+    return _BASE_COMMENT_COLUMNS, False
 
 
 def _snapshot_size(conn: sqlite3.Connection) -> str:
@@ -169,19 +181,41 @@ def list_comments(
     limit: int,
     offset: int = 0,
 ) -> tuple[list[dict], int]:
-    """One post's stored comments in Facebook's own order, top first."""
+    """One post's stored comments in Facebook's own order, top first.
+
+    Threaded: a reply follows the comment it answers, so the flat list a
+    template walks is already in reading order. A database written before
+    `parent_comment_id` existed sorts flat, exactly as it used to.
+    """
     if not _has_comments(conn):
         return [], 0
+    columns, threaded = _comment_columns(conn)
     total = int(
         conn.execute(
             "SELECT COUNT(*) FROM comments WHERE post_id = ?", (post_id,)
         ).fetchone()[0]
     )
-    rows = conn.execute(
-        f"SELECT {_COMMENT_COLUMNS} FROM comments WHERE post_id = ?"
-        " ORDER BY rank_index ASC, comment_id ASC LIMIT ? OFFSET ?",
-        (post_id, *_clamp(limit, offset)),
-    ).fetchall()
+    if threaded:
+        # A reply's own rank_index counts its siblings, so ordering by it
+        # alone would interleave threads. The join lifts each reply to its
+        # parent's rank first, which is the thread's position on the post.
+        selected = ", ".join(f"c.{name}" for name in columns.split(", "))
+        sql = (
+            f"SELECT {selected} FROM comments c"
+            " LEFT JOIN comments p ON p.comment_id = c.parent_comment_id"
+            " WHERE c.post_id = ?"
+            " ORDER BY COALESCE(p.rank_index, c.rank_index) ASC,"
+            " COALESCE(p.comment_id, c.comment_id) ASC,"
+            " (c.parent_comment_id IS NOT NULL) ASC,"
+            " c.rank_index ASC, c.comment_id ASC"
+            " LIMIT ? OFFSET ?"
+        )
+    else:
+        sql = (
+            f"SELECT {columns} FROM comments WHERE post_id = ?"
+            " ORDER BY rank_index ASC, comment_id ASC LIMIT ? OFFSET ?"
+        )
+    rows = conn.execute(sql, (post_id, *_clamp(limit, offset))).fetchall()
     return _rows_to_dicts(rows), total
 
 

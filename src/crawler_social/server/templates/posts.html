@@ -54,6 +54,7 @@
     <tr>
       <th scope="col">Published (UTC)</th>
       <th scope="col">Author</th>
+      <th scope="col">Reactions</th>
       <th scope="col">Text</th>
       {% if multiple_pages %}<th scope="col">Page</th>{% endif %}
       <th scope="col">First seen</th>
@@ -66,6 +67,7 @@
     <tr>
       <td class="col-when" title="{{ row.when_age }}">{{ row.published_at or "—" }}</td>
       <td class="col-author">{{ row.author or "—" }}</td>
+      <td class="col-count">{% if row.reaction_count is not none %}{{ row.reaction_count }}{% else %}—{% endif %}</td>
       <td class="col-text"><a class="post-link excerpt" href="{{ row.url }}">{{ row.text_html }}</a></td>
       {% if multiple_pages %}<td class="col-page">{{ row.page_url }}</td>{% endif %}
       <td class="col-seen">{{ row.first_seen }}</td>

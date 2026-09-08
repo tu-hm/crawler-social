@@ -136,11 +136,21 @@ def _has_password_input(soup: BeautifulSoup) -> bool:
 
 
 def count_articles(soup: BeautifulSoup) -> int:
-    """Article nodes carrying enough text to be a real post."""
+    """Story-shaped nodes carrying enough text to be a real post.
+
+    Modern feeds mark a story with `aria-posinset` and keep `role="article"`
+    for comments, so counting articles alone reads a fully rendered feed as
+    empty. Both shapes are counted; a node is not counted twice.
+    """
+    seen: set[int] = set()
     total = 0
-    for node in soup.find_all(attrs={"role": "article"}):
-        if len(node.get_text(" ", strip=True)) >= MIN_ARTICLE_TEXT:
-            total += 1
+    for attrs in ({"aria-posinset": True}, {"role": "article"}):
+        for node in soup.find_all(attrs=attrs):
+            if id(node) in seen:
+                continue
+            seen.add(id(node))
+            if len(node.get_text(" ", strip=True)) >= MIN_ARTICLE_TEXT:
+                total += 1
     return total
 
 

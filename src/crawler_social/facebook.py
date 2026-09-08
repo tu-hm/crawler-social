@@ -322,6 +322,12 @@ class CaptureOptions:
     jitter_ms: int = 900
     expand_text: bool = True
     max_expand_clicks: int = 12
+    #: Hover each story's timestamp to make its permalink and exact time
+    #: exist. Off means the feed's own markup is all that gets captured,
+    #: which for a group feed is neither a time nor a usable post id.
+    hover_timestamps: bool = True
+    #: Stories hovered per scroll step. A hover costs ~0.8s.
+    max_hovers: int = 12
 
 
 def _is_text_expander(element) -> bool:
@@ -344,9 +350,12 @@ def _is_text_expander(element) -> bool:
     return bool(SEE_MORE_PATTERN.search((text or "").strip()))
 
 
-#: Group feeds keep post bodies under role="feed" and only comments in
-#: role="article"; permalinks have articles and no feed, so both are needed.
-_CONTENT_ROOTS = '[role="feed"], [role="article"]'
+#: Where a post body can be, across the surfaces this crawler sees. All three
+#: are needed and none is redundant: a Page feed has *no* `role="feed"` at all
+#: and leaves `role="article"` to comments, so scoping to those two searched
+#: the comments and never found the story's own "See more" -- the button is in
+#: the `aria-posinset` unit. Permalink pages have articles and no feed.
+_CONTENT_ROOTS = '[role="feed"], [role="article"], [aria-posinset]'
 
 
 def _in_content(page):
@@ -480,6 +489,213 @@ def expand_post_text(
     )
 
 
+# --- The hover pass --------------------------------------------------------
+#
+# A feed carries neither a story's permalink nor its timestamp. Facebook fills
+# the href in and renders an absolute-date tooltip only once the pointer is
+# over the timestamp link, so both have to be provoked at capture time -- the
+# parser cannot recover from bytes what was never in them. What appears is
+# written straight onto the story node, and the parser reads it back from the
+# captured markup like any other attribute.
+
+#: The timestamp link's own text: a relative age ("4 giờ", "2h", "Vừa xong")
+#: or, past a week, a short date ("8 Tháng 9", "8 September").
+_AGE_TEXT = re.compile(
+    r"^\s*(?:\d{1,2}\s*(?:gi\u00e2y|ph\u00fat|gi\u1edd|ti\u1ebfng|ng\u00e0y|tu\u1ea7n|th\u00e1ng|n\u0103m"
+    r"|s|m|h|d|w|y|mo|min|mins|hr|hrs|hour|hours|day|days|week|weeks)"
+    r"\s*(?:ago|tr\u01b0\u1edbc)?"
+    r"|\d{1,2}\s+th\u00e1ng\s+\d{1,2}(?:,?\s*\d{4})?"
+    r"|\d{1,2}\s+[^\W\d_]{3,12}(?:,?\s*\d{4})?"
+    r"|[^\W\d_]{3,12}\s+\d{1,2}(?:,?\s*\d{4})?"
+    r"|v\u1eeba xong|just now|y?esterday|h\u00f4m qua)\s*$",
+    re.IGNORECASE,
+)
+
+#: Stamped on a story once it has been hovered, so a later scroll step does
+#: not pay for the same story twice. Mirrors parser.PERMALINK_ATTR and friends.
+PERMALINK_ATTR = "data-crawler-permalink"
+TIMESTAMP_ATTR = "data-crawler-timestamp"
+TZ_OFFSET_ATTR = "data-crawler-tz-offset"
+HOVERED_ATTR = "data-crawler-hovered"
+
+_STAMP_JS = """(node, data) => {
+  node.setAttribute('data-crawler-hovered', '1');
+  node.setAttribute('data-crawler-tz-offset', String(data.tz));
+  if (data.permalink) node.setAttribute('data-crawler-permalink', data.permalink);
+  if (data.timestamp) node.setAttribute('data-crawler-timestamp', data.timestamp);
+}"""
+
+#: Facebook fetches the permalink on hover; under this it has not landed yet.
+HOVER_SETTLE_MS = 550
+
+
+#: Anchors worth hovering, most likely first, as indices into the story's own
+#: `a` elements. The timestamp link is the one whose href is a bare query
+#: string ("?__cft__[0]=…"): Facebook replaces it with the real permalink on
+#: hover, and renders the story's absolute date in a tooltip beside it. It
+#: cannot be found by its text, because the text of that link is deliberately
+#: obfuscated -- the visible age is assembled from decoy spans, so both
+#: innerText and textContent come back empty.
+_CANDIDATE_JS = """(node, agePattern) => {
+  const anchors = [...node.querySelectorAll('a')];
+  const bare = [], aged = [];
+  const age = new RegExp(agePattern, 'i');
+  anchors.forEach((a, i) => {
+    const href = a.getAttribute('href') || '';
+    const text = (a.textContent || '').trim();
+    if (!text && (href.startsWith('?') || href === '#')) bare.push(i);
+    else if (age.test(text)) aged.push(i);
+  });
+  return [...bare, ...aged];
+}"""
+
+
+def _timestamp_candidates(unit) -> list[int]:
+    """Indices of the anchors in `unit` that might be its timestamp."""
+    try:
+        return unit.evaluate(_CANDIDATE_JS, _AGE_TEXT.pattern)[:_SCAN_LIMIT]
+    except Exception:  # noqa: BLE001 - a dead locator has no timestamp
+        return []
+
+
+def _tooltip_text(page) -> str:
+    """The hover card Facebook renders beside the timestamp, or ""."""
+    for selector in ('[role="tooltip"]', "[data-testid='tooltip_text']"):
+        try:
+            tooltip = page.locator(selector).last
+            if tooltip.is_visible(timeout=CLICK_TIMEOUT_MS):
+                return (tooltip.inner_text(timeout=CLICK_TIMEOUT_MS) or "").strip()
+        except Exception:  # noqa: BLE001 - no tooltip is the common case
+            continue
+    return ""
+
+
+def _hover_for_permalink(page, unit, rng: random.Random) -> tuple[str, str]:
+    """Hover one story's timestamp candidates until one of them yields.
+
+    Several anchors in a story share the timestamp's href shape -- one in the
+    header, others on the attachment -- and only the header's renders the
+    tooltip. So they are tried in order and the first that produces either a
+    real permalink or a date is taken.
+    """
+    for index in _timestamp_candidates(unit):
+        link = unit.locator("a").nth(index)
+        try:
+            if not link.is_visible(timeout=CLICK_TIMEOUT_MS):
+                continue
+            link.hover(timeout=CLICK_TIMEOUT_MS)
+            page.wait_for_timeout(HOVER_SETTLE_MS + rng.randint(0, 250))
+            href = link.get_attribute("href", timeout=CLICK_TIMEOUT_MS) or ""
+            tooltip = _tooltip_text(page)
+        except Exception:  # noqa: BLE001 - one anchor, not the story
+            continue
+        # An href still shaped like the placeholder means the hover did not
+        # land: Facebook rewrites it in place once it has resolved the story.
+        permalink = href if href and not href.startswith(("?", "#")) else ""
+        if permalink or tooltip:
+            return permalink, tooltip
+    return "", ""
+
+
+#: A comment container on a permalink page. Facebook labels every one.
+_COMMENT_NODE = 'div[role="article"][aria-label]'
+
+
+def annotate_comments(
+    page, options: "CommentOptions", rng: random.Random, offset: int | None = None
+) -> int:
+    """Hover each comment's timestamp so its exact time reaches the markup.
+
+    A comment's age is obfuscated exactly as a story's is, and Facebook rounds
+    what it does render: nine comments posted days apart all read "1 tuần".
+    The hover tooltip carries the minute instead. Returns how many were
+    annotated.
+    """
+    if offset is None:
+        try:
+            offset = int(page.evaluate("() => new Date().getTimezoneOffset()"))
+        except Exception:  # noqa: BLE001 - without it a tooltip cannot reach UTC
+            return 0
+    annotated = 0
+    try:
+        total = min(page.locator(_COMMENT_NODE).count(), options.max_comment_hovers)
+    except Exception:  # noqa: BLE001 - a dead locator ends the pass
+        return 0
+    for index in range(total):
+        node = page.locator(f"{_COMMENT_NODE}:not([{HOVERED_ATTR}])").first
+        try:
+            if not node.is_visible(timeout=CLICK_TIMEOUT_MS):
+                break
+        except Exception:  # noqa: BLE001 - nothing left to hover
+            break
+        permalink, timestamp = _hover_for_permalink(page, node, rng)
+        try:
+            node.evaluate(
+                _STAMP_JS,
+                {"permalink": permalink, "timestamp": timestamp, "tz": offset},
+            )
+        except Exception:  # noqa: BLE001 - unstampable comment; move on
+            break
+        if timestamp:
+            annotated += 1
+    return annotated
+
+
+def annotate_stories(
+    page,
+    options: CaptureOptions,
+    rng: random.Random,
+    *,
+    url: str | None = None,
+) -> int:
+    """Hover each on-screen story's timestamp and record what appears.
+
+    Returns how many stories were annotated. Hovering is read-only -- it never
+    clicks, so it cannot navigate, open a menu, or mark anything as seen --
+    and a story that yields nothing is stamped as hovered anyway, so the next
+    scroll step spends its budget on stories it has not tried yet.
+    """
+    if not options.hover_timestamps or options.max_hovers <= 0:
+        return 0
+    expected = url or page.url or ""
+    try:
+        offset = int(page.evaluate("() => new Date().getTimezoneOffset()"))
+    except Exception:  # noqa: BLE001 - without it a tooltip cannot reach UTC
+        return 0
+    try:
+        units = page.locator(f'[aria-posinset]:not([{HOVERED_ATTR}])')
+        total = min(units.count(), options.max_hovers)
+    except Exception:  # noqa: BLE001 - a dead locator ends the pass
+        return 0
+
+    annotated = 0
+    for _ in range(total):
+        # Re-queried every step: each hover mutates the DOM, and the
+        # :not([hovered]) filter means .first is always the next story.
+        unit = page.locator(f'[aria-posinset]:not([{HOVERED_ATTR}])').first
+        try:
+            if not unit.is_visible(timeout=CLICK_TIMEOUT_MS):
+                break
+        except Exception:  # noqa: BLE001 - nothing left to hover
+            break
+        permalink, timestamp = _hover_for_permalink(page, unit, rng)
+        try:
+            unit.evaluate(
+                _STAMP_JS,
+                {"permalink": permalink, "timestamp": timestamp, "tz": offset},
+            )
+        except Exception:  # noqa: BLE001 - unstampable story; move on
+            break
+        if permalink or timestamp:
+            annotated += 1
+        # A hover cannot navigate, but a misidentified control that turned out
+        # to be a link under the pointer still can. Stop rather than keep
+        # hovering a page nobody asked to capture.
+        if expected and not _same_page(page.url, expected):
+            break
+    return annotated
+
+
 def human_scroll(page, options: CaptureOptions, rng: random.Random) -> None:
     """Scroll in irregular steps, then pause for an irregular time.
 
@@ -531,6 +747,9 @@ def capture_snapshots(
         first = True
 
         while time.monotonic() < deadline and not should_stop():
+            # Hover before expanding: a "See more" click reflows the story and
+            # moves the timestamp, so the cheap read goes first.
+            annotate_stories(page, options, rng, url=page_url)
             expand_post_text(page, options, rng, url=page_url)
             html, verdict = inspect(page, page_url)
             captured_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -558,6 +777,15 @@ class CommentOptions:
     top_n: int = 0
     max_posts: int = DEFAULT_COMMENT_MAX_POSTS
     max_more_clicks: int = 6
+    #: "View 3 replies" clicks. Reply threads are collapsed by default, so
+    #: without these a thread is stored one comment deep.
+    max_reply_clicks: int = 12
+    include_replies: bool = True
+    #: Hover each comment's timestamp for its exact time. Facebook rounds the
+    #: age it renders ("1 tuần" for everything in a week), so without this the
+    #: stored times are a week wide.
+    hover_timestamps: bool = True
+    max_comment_hovers: int = 60
     max_expand_clicks: int = 20
     settle_ms: int = 2500
     pause_ms: int = 2000
@@ -590,7 +818,12 @@ def _visible_comment_count(page) -> int:
 
 
 def _expand_comments(page, options: CommentOptions, rng: random.Random) -> None:
-    """Load more comments, then un-truncate the bodies that are showing."""
+    """Load more comments and replies, then un-truncate the bodies showing.
+
+    Three passes in order, because each one uncovers work for the next: more
+    top-level comments, then the reply threads collapsed under them, then the
+    "See more" on every body now on screen.
+    """
     seen = _visible_comment_count(page)
     clicks = 0
     while clicks < options.max_more_clicks and seen < options.top_n + 1:
@@ -609,6 +842,26 @@ def _expand_comments(page, options: CommentOptions, rng: random.Random) -> None:
             break
         seen = grown
 
+    # Replies are collapsed behind "View 3 replies" and are genuinely absent
+    # from the DOM until it is clicked -- the same bargain as "See more".
+    if options.include_replies and options.max_reply_clicks > 0:
+        replies_clicked = 0
+        while replies_clicked < options.max_reply_clicks:
+            landed = _click_repeatedly(
+                page,
+                MORE_REPLIES_PATTERN,
+                max_clicks=1,
+                rng=rng,
+                settle_ms=900,
+            )
+            if not landed:
+                break
+            replies_clicked += landed
+            grown = _visible_comment_count(page)
+            if grown <= seen:
+                break
+            seen = grown
+
     _click_repeatedly(
         page,
         SEE_MORE_PATTERN,
@@ -617,6 +870,11 @@ def _expand_comments(page, options: CommentOptions, rng: random.Random) -> None:
         accept=_is_text_expander,
         scope=_in_content,
     )
+
+    # Last, because every click above reflows the list and moves the
+    # timestamps this hovers.
+    if options.hover_timestamps:
+        annotate_comments(page, options, rng)
 
 
 def capture_comments(

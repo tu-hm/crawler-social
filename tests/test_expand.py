@@ -311,3 +311,30 @@ def test_a_stray_button_does_not_stop_the_real_ones():
 )
 def test_see_more_pattern_is_anchored(label, expanding):
     assert bool(facebook.SEE_MORE_PATTERN.search(label)) is expanding
+
+
+def selector_parts() -> set[str]:
+    return {part.strip() for part in facebook._CONTENT_ROOTS.split(",")}
+
+
+def test_the_search_scope_covers_a_feed_unit():
+    """The regression this constant exists for.
+
+    A Facebook Page feed has no `role="feed"` element at all, and leaves
+    `role="article"` to comments -- so a scope of those two searched the
+    comments and never saw the story's own "See more". The button lives in
+    the `aria-posinset` unit, and without it every long body on a Page was
+    stored truncated at "… See more".
+    """
+    assert "[aria-posinset]" in selector_parts()
+
+
+def test_the_search_scope_still_covers_the_older_surfaces():
+    """A permalink page has articles and no feed; older feeds had both."""
+    assert {'[role="feed"]', '[role="article"]'} <= selector_parts()
+
+
+def test_expansion_falls_back_to_the_whole_page_when_nothing_matches():
+    """A surface none of the roots match must not silently expand nothing."""
+    page = FakePage([FakeElement("See more")], content=False)
+    assert facebook.expand_post_text(page, OPTIONS, RNG) == 1

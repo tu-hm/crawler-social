@@ -387,6 +387,13 @@ pre.source-view .ln {
 }
 .comment-list { margin: 0.5rem 0; padding-left: 1.5rem; }
 .comment { margin: 0 0 0.9rem; }
+/* A reply is indented under the comment it answers; the border carries
+   the nesting when the marker is the only other cue. */
+.comment-reply {
+  margin-left: 1.5rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--border);
+}
 .comment-head { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: baseline; }
 .comment-body {
   white-space: pre-wrap;

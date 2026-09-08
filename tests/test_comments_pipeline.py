@@ -76,7 +76,9 @@ def fake_comments(html: bytes | None = None, *, error=None, blocked=False):
     return capture
 
 
-def run(config, capture, comments_stub, *, top_comments=3, limit=20):
+def run(
+    config, capture, comments_stub, *, top_comments=3, limit=20, include_replies=True
+):
     with unittest.mock.patch.object(facebook, "capture_snapshots", capture):
         with unittest.mock.patch.object(
             facebook, "capture_comments", comments_stub
@@ -86,6 +88,7 @@ def run(config, capture, comments_stub, *, top_comments=3, limit=20):
                 limit=limit,
                 config=config,
                 top_comments=top_comments,
+                include_replies=include_replies,
             )
 
 
@@ -93,11 +96,27 @@ def stored_comments(db_path: Path) -> list[tuple]:
     conn = db.connect(db_path)
     try:
         return conn.execute(
-            "SELECT post_id, comment_id, author, rank_index FROM comments"
-            " ORDER BY post_id, rank_index"
+            "SELECT post_id, comment_id, author, rank_index,"
+            " parent_comment_id FROM comments"
+            " ORDER BY post_id, COALESCE(parent_comment_id, comment_id),"
+            " parent_comment_id IS NOT NULL, rank_index"
         ).fetchall()
     finally:
         conn.close()
+
+
+def test_replies_can_be_left_out(tmp_path):
+    config = make_config(tmp_path)
+    summary = run(
+        config,
+        fake_capture([page_html("777001")]),
+        fake_comments(FIXTURE.read_bytes()),
+        include_replies=False,
+    )
+    assert summary.comments_captured == 3
+    rows = stored_comments(config.db_path)
+    assert all(row[4] is None for row in rows)
+    assert all(row[2] != "Bob Tran" for row in rows)
 
 
 def test_comments_are_stored_for_each_captured_post(tmp_path):
@@ -107,10 +126,18 @@ def test_comments_are_stored_for_each_captured_post(tmp_path):
     )
     assert summary.status == "completed"
     assert summary.posts_with_comments == 1
-    assert summary.comments_captured == 3  # top_comments=3 truncates the five
+    # top_comments=3 truncates the five top-level comments; the reply to the
+    # first of them rides along, because a reply never uses up the budget.
+    assert summary.comments_captured == 4
     rows = stored_comments(config.db_path)
-    assert [r[3] for r in rows] == [1, 2, 3]
-    assert rows[0][2] == "Alice Nguyen"
+    assert [(r[2], r[3]) for r in rows] == [
+        ("Alice Nguyen", 1),
+        ("Bob Tran", 1),
+        ("Trần Minh", 2),
+        ("Chris Doe", 3),
+    ]
+    # The reply is threaded under the comment it answers, not under the post.
+    assert [r[4] for r in rows] == [None, "1001", None, None]
 
 
 def test_the_pass_is_off_unless_asked_for(tmp_path):
@@ -222,8 +249,8 @@ def test_comments_survive_a_second_run_without_duplicating(tmp_path):
             fake_comments(FIXTURE.read_bytes()),
         )
     rows = stored_comments(config.db_path)
-    assert len(rows) == 3
-    assert len({r[1] for r in rows}) == 3
+    assert len(rows) == 4
+    assert len({r[1] for r in rows}) == 4
 
 
 def test_comments_command_lists_stored_comments(tmp_path, monkeypatch):

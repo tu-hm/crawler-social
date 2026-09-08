@@ -1,8 +1,9 @@
-.PHONY: test install login session crawl chrome-cdp posts serve serve-check test-server vendor vendor-verify clean
+.PHONY: test install login session crawl full chrome-cdp posts comments serve serve-check test-server vendor vendor-verify clean
 
 # Run tests first by default.
 LIMIT ?= 10
 PAGE ?= ""
+TARGETS ?= example.txt
 
 test: install
 	uv run pytest
@@ -28,8 +29,18 @@ chrome-cdp:
 crawl: test
 	uv run crawler crawl "$(PAGE)"
 
+# Whole posts -- body, exact publication time, comments and replies -- for
+# every URL in TARGETS. One page load per post, so it is the slow one.
+#   make full                      # every target in example.txt
+#   make full TARGETS=mine.txt LIMIT=5
+full: test
+	uv run crawler crawl --targets "$(TARGETS)" --full --limit $(LIMIT)
+
 posts:
 	uv run crawler posts --limit $(LIMIT)
+
+comments:
+	uv run crawler comments --limit $(LIMIT)
 
 # Local, read-only web viewer on http://127.0.0.1:8765
 serve:

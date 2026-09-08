@@ -18,7 +18,12 @@ from typing import Optional
 from . import db, facebook
 from .config import Config
 from .lock import LockBusyError
-from .parser import parse, parse_comments
+from .parser import (
+    is_synthetic_post_id,
+    parse,
+    parse_comments,
+    parse_post_detail,
+)
 from .paths import default_db_path
 
 CONSECUTIVE_KNOWN_STOP = 5
@@ -39,6 +44,9 @@ class RunSummary:
     blocked_message: Optional[str] = None
     comments_captured: int = 0
     posts_with_comments: int = 0
+    #: Posts re-read from their own permalink, where the body is whole and
+    #: the timestamp is the story's own rather than the feed's relative age.
+    posts_hydrated: int = 0
 
 
 class _StopRequest:
@@ -74,7 +82,10 @@ def _comment_targets(
     """New posts first, then known ones, capped at `max_posts`.
 
     A post whose article carried no usable permalink falls back to the
-    constructed `/posts/<id>` form.
+    constructed `/posts/<id>` form. A post with neither -- a story the feed
+    rendered without any Facebook id, which the parser then keyed by content
+    -- has no permalink to construct and is skipped rather than sent to a
+    URL that cannot resolve.
     """
     ordered = [p for p, known in pending_posts if not known]
     ordered += [p for p, known in pending_posts if known]
@@ -84,15 +95,18 @@ def _comment_targets(
         if post.post_id in seen:
             continue
         seen.add(post.post_id)
-        targets.append(
-            (post.post_id, post.url or facebook.post_permalink(page_url, post.post_id))
-        )
+        url = post.url
+        if not url:
+            if is_synthetic_post_id(post.post_id):
+                continue
+            url = facebook.post_permalink(page_url, post.post_id)
+        targets.append((post.post_id, url))
         if len(targets) >= max_posts:
             break
     return targets
 
 
-def _collect_comments(
+def _hydrate_posts(
     conn,
     run_id: int,
     config: Config,
@@ -102,12 +116,16 @@ def _collect_comments(
     options,
     should_stop,
 ) -> Optional[facebook.BlockedError]:
-    """Run the permalink pass and commit one transaction per post.
+    """Visit each post's permalink and store what the feed could not show.
+
+    One visit yields both halves of a full post: the story re-read whole --
+    untruncated body, exact publication time, settled reaction total -- and
+    its comment thread. Both commit in the same transaction per post.
 
     Returns the BlockedError when a wall ended the pass, else None. Every
     other failure becomes a diagnostic: the posts are already stored, and a
-    run that captured them is not a failed run just because a comment
-    thread would not load.
+    run that captured them is not a failed run just because one permalink
+    would not load.
     """
     targets = _comment_targets(pending_posts, page_url, options.max_posts)
     if not targets:
@@ -123,22 +141,48 @@ def _collect_comments(
         ):
             if capture.error or capture.html is None:
                 summary.diagnostics.append(
-                    f"comments: {capture.post_id}: {capture.error or 'no html'}"
+                    f"hydrate: {capture.post_id}: {capture.error or 'no html'}"
                 )
                 summary.errors += 1
                 continue
+            captured_at = datetime.now(timezone.utc)
+            detail, detail_diagnostics = parse_post_detail(
+                capture.html, page_url, capture.post_id, captured_at
+            )
             comments, diagnostics = parse_comments(
                 capture.html,
                 capture.post_id,
-                datetime.now(timezone.utc),
+                captured_at,
                 limit=options.top_n,
+                include_replies=options.include_replies,
             )
             for diag in diagnostics:
                 summary.diagnostics.append(f"{diag.reason}: {diag.context}")
             summary.errors += len(diagnostics)
-            if not comments:
+            if detail is None:
+                # The permalink loaded but held no readable story: a deleted
+                # post, or markup that moved. Worth naming, not worth failing.
+                for diag in detail_diagnostics:
+                    summary.diagnostics.append(f"{diag.reason}: {diag.context}")
+
+            if detail is None and not comments:
                 continue
             with db.transaction(conn):
+                if detail is not None:
+                    db.upsert_post(
+                        conn,
+                        detail.post_id,
+                        detail.page_url,
+                        detail.text,
+                        detail.author,
+                        detail.published_at,
+                        # The URL actually navigated to, in preference to
+                        # anything on the page: it came from the hover and
+                        # resolved, where a link in the story body is as
+                        # likely to be the photo viewer as the post.
+                        post_url=capture.post_url or detail.url,
+                        reaction_count=detail.reaction_count,
+                    )
                 for comment in comments:
                     db.upsert_comment(
                         conn,
@@ -150,14 +194,18 @@ def _collect_comments(
                         comment.published_at,
                         comment.like_count,
                         comment.rank,
+                        parent_comment_id=comment.parent_comment_id,
                     )
-            summary.comments_captured += len(comments)
-            summary.posts_with_comments += 1
+            if detail is not None:
+                summary.posts_hydrated += 1
+            if comments:
+                summary.comments_captured += len(comments)
+                summary.posts_with_comments += 1
     except facebook.BlockedError as exc:
-        summary.diagnostics.append(f"comments blocked: {exc.verdict.reason}")
+        summary.diagnostics.append(f"hydrate blocked: {exc.verdict.reason}")
         return exc
     except Exception as exc:  # noqa: BLE001 - the posts are already committed
-        summary.diagnostics.append(f"comments: {type(exc).__name__}: {exc}")
+        summary.diagnostics.append(f"hydrate: {type(exc).__name__}: {exc}")
         summary.errors += 1
     return None
 
@@ -170,6 +218,8 @@ def run_crawl(
     top_comments: Optional[int] = None,
     comments_max_posts: Optional[int] = None,
     expand_text: Optional[bool] = None,
+    include_replies: Optional[bool] = None,
+    hover_timestamps: Optional[bool] = None,
 ) -> RunSummary:
     """Crawl `page_url`; the keyword options fall back to `config` when None."""
     top_comments = (
@@ -180,8 +230,16 @@ def run_crawl(
         if comments_max_posts is None
         else max(1, comments_max_posts)
     )
+    include_replies = (
+        config.include_replies if include_replies is None else include_replies
+    )
     capture_options = facebook.CaptureOptions(
-        expand_text=config.expand_text if expand_text is None else expand_text
+        expand_text=config.expand_text if expand_text is None else expand_text,
+        hover_timestamps=(
+            config.hover_timestamps
+            if hover_timestamps is None
+            else hover_timestamps
+        ),
     )
     stop = _StopRequest()
     conn = db.connect(config.db_path)
@@ -275,15 +333,17 @@ def run_crawl(
                     post.author,
                     post.published_at,
                     post_url=post.url,
+                    reaction_count=post.reaction_count,
                 )
             # A blocked run saw an incomplete feed: store posts, hold state.
             if pending_posts and blocked is None:
                 newest = pending_posts[0][0]
                 db.set_state(conn, page_url, newest.post_id, newest.published_at)
 
-        # After the post transaction, so a comment failure cannot cost posts (D6).
+        # After the post transaction, so a hydration failure cannot cost the
+        # posts the feed pass already stored (D6).
         if blocked is None and top_comments > 0 and not stop.requested:
-            comment_blocked = _collect_comments(
+            comment_blocked = _hydrate_posts(
                 conn,
                 run_id,
                 config,
@@ -291,7 +351,9 @@ def run_crawl(
                 pending_posts,
                 page_url,
                 facebook.CommentOptions(
-                    top_n=top_comments, max_posts=comments_max_posts
+                    top_n=top_comments,
+                    max_posts=comments_max_posts,
+                    include_replies=include_replies,
                 ),
                 should_stop=lambda: stop.requested,
             )
